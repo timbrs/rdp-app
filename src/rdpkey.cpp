@@ -69,6 +69,39 @@ static HHOOK s_hook = NULL;
 
 static bool IsDown(int vk) { return (GetAsyncKeyState(vk) & 0x8000) != 0; }
 
+// Клавиши, участвующие в пробрасываемых сочетаниях. Всё остальное хук
+// не рассматривает: выходим до чтения scan-кода и до проверки фокуса.
+static bool IsWatchedKey(int vk) {
+    switch (vk) {
+    case VK_LWIN:  case VK_RWIN:
+    case VK_MENU:  case VK_LMENU:  case VK_RMENU:
+    case VK_SHIFT: case VK_LSHIFT: case VK_RSHIFT:
+    case VK_TAB:   case VK_ESCAPE:
+        return true;
+    }
+    return false;
+}
+
+static bool IsModifierKey(int vk) {
+    switch (vk) {
+    case VK_CONTROL: case VK_LCONTROL: case VK_RCONTROL:
+        return true;
+    }
+    return IsWatchedKey(vk) && vk != VK_TAB && vk != VK_ESCAPE;
+}
+
+// Префикс KM_, а не MOD_: MOD_ALT/MOD_SHIFT/MOD_WIN заняты макросами winuser.h.
+enum { KM_ALT = 1, KM_CTRL = 2, KM_SHIFT = 4, KM_WIN = 8 };
+
+static int ModMask() {
+    int m = 0;
+    if (IsDown(VK_MENU))    m |= KM_ALT;
+    if (IsDown(VK_CONTROL)) m |= KM_CTRL;
+    if (IsDown(VK_SHIFT))   m |= KM_SHIFT;
+    if (IsDown(VK_LWIN) || IsDown(VK_RWIN)) m |= KM_WIN;
+    return m;
+}
+
 static bool IsWindowFullScreen(HWND w) {
     RECT wr;
     if (!GetWindowRect(w, &wr)) return false;
@@ -133,7 +166,16 @@ static bool Handle(WPARAM wParam, LPARAM lParam) {
     bool down = (wParam == WM_KEYDOWN || wParam == WM_SYSKEYDOWN);
     bool up   = (wParam == WM_KEYUP   || wParam == WM_SYSKEYUP);
     if (!down && !up) return false;
-    int vk = kb->vkCode, sc = kb->scanCode;
+    int vk = kb->vkCode;
+
+    // Win мог быть отпущен, пока фокус был вне сессии — сверяемся с железом,
+    // иначе залипший s_winDown глотал бы посторонние клавиши.
+    if (s_winDown && !IsDown(VK_LWIN) && !IsDown(VK_RWIN)) { s_winDown = false; s_winCombo = false; }
+
+    // Пока Win зажат — любая клавиша идёт в аккорд; иначе только клавиши из списка.
+    if (!s_winDown && !IsWatchedKey(vk)) return false;
+
+    int sc = kb->scanCode;
     bool ext = (kb->flags & LLKHF_EXTENDED) != 0;
 
     if (!IsRemoteFocused()) { ReleaseSticky(); s_winDown = false; return false; }
@@ -154,14 +196,18 @@ static bool Handle(WPARAM wParam, LPARAM lParam) {
         return true;
     }
     if (s_winDown && g_fwdWinCombo) {
+        if (IsModifierKey(vk)) return false;
         if (down) { s_winCombo = true; SendWinChord(sc, ext, vk); }
         return true;
     }
-    if (g_fwdAltTab && vk == VK_TAB && IsDown(VK_MENU)) {
-        if (down) SendAltTab(IsDown(VK_SHIFT), sc, ext);
+    if (g_fwdAltTab && vk == VK_TAB) {
+        int m = ModMask();
+        if (m != KM_ALT && m != (KM_ALT | KM_SHIFT)) return false;
+        if (down) SendAltTab((m & KM_SHIFT) != 0, sc, ext);
         return true;
     }
-    if (g_fwdCtrlEsc && vk == VK_ESCAPE && IsDown(VK_CONTROL)) {
+    if (g_fwdCtrlEsc && vk == VK_ESCAPE) {
+        if (ModMask() != KM_CTRL) return false;
         if (down) {
             int e = sc ? sc : SC_ESC;
             Scan s[4] = { {SC_LCTRL,false,false,VK_CONTROL}, {e,false,ext,VK_ESCAPE}, {e,true,ext,VK_ESCAPE}, {SC_LCTRL,true,false,VK_CONTROL} };
