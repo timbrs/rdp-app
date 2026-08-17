@@ -169,8 +169,11 @@ static bool Handle(WPARAM wParam, LPARAM lParam) {
     int vk = kb->vkCode;
 
     // Win мог быть отпущен, пока фокус был вне сессии — сверяемся с железом,
-    // иначе залипший s_winDown глотал бы посторонние клавиши.
-    if (s_winDown && !IsDown(VK_LWIN) && !IsDown(VK_RWIN)) { s_winDown = false; s_winCombo = false; }
+    // иначе залипший s_winDown глотал бы посторонние клавиши. События самой
+    // Win-клавиши исключены: на её up железо уже показывает «отпущена»
+    // (async-состояние обновляется до вызова хука), и сброс здесь съел бы тап.
+    bool isWinKey = (vk == VK_LWIN || vk == VK_RWIN);
+    if (s_winDown && !isWinKey && !IsDown(VK_LWIN) && !IsDown(VK_RWIN)) { s_winDown = false; s_winCombo = false; }
 
     // Пока Win зажат — любая клавиша идёт в аккорд; иначе только клавиши из списка.
     if (!s_winDown && !IsWatchedKey(vk)) return false;
@@ -190,7 +193,7 @@ static bool Handle(WPARAM wParam, LPARAM lParam) {
         else if (s_shiftSticky) { Scan s = {s_shiftScan,true,s_shiftExt,VK_SHIFT}; Enqueue(&s,1); s_shiftSticky = false; }
         return false;
     }
-    if (g_fwdWin && (vk == VK_LWIN || vk == VK_RWIN)) {
+    if (g_fwdWin && isWinKey) {
         if (down) { if (!s_winDown) { s_winDown = true; s_winCombo = false; s_winScan = sc; s_winExt = ext; } }
         else { if (s_winDown && !s_winCombo) SendWinTap(); s_winDown = false; }
         return true;
