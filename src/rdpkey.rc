@@ -1,4 +1,5 @@
 #include <windows.h>
+#include "version.h"
 
 // Манифест: asInvoker + PerMonitorV2 DPI.
 1 24 "app.manifest"
@@ -6,8 +7,8 @@
 1 ICON "app.ico"
 
 VS_VERSION_INFO VERSIONINFO
- FILEVERSION    1,0,2,0
- PRODUCTVERSION 1,0,2,0
+ FILEVERSION    RDPKEY_VER_NUM
+ PRODUCTVERSION RDPKEY_VER_NUM
  FILEFLAGSMASK  0x3fL
  FILEFLAGS      0x0L
  FILEOS         VOS_NT_WINDOWS32
@@ -20,12 +21,12 @@ BEGIN
         BEGIN
             VALUE "CompanyName",      "rdpkey"
             VALUE "FileDescription",  "RDP RemoteApp hotkey forwarder"
-            VALUE "FileVersion",      "1.0.2.0"
+            VALUE "FileVersion",      RDPKEY_VER_STR
             VALUE "InternalName",     "rdpkey"
             VALUE "LegalCopyright",    "MIT License"
             VALUE "OriginalFilename", "rdpkey.exe"
             VALUE "ProductName",      "RDP RemoteApp Hotkeys"
-            VALUE "ProductVersion",   "1.0.2.0"
+            VALUE "ProductVersion",   RDPKEY_VER_STR
         END
     END
     BLOCK "VarFileInfo"

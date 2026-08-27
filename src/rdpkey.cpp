@@ -1,6 +1,7 @@
 #include <windows.h>
 #include <stdio.h>
 #include <conio.h>
+#include "version.h"
 
 static const bool g_fwdWin = true, g_fwdWinCombo = true, g_fwdAltTab = true, g_fwdCtrlEsc = true;
 static const char g_altMode[16] = "tab";
@@ -63,6 +64,8 @@ static const int SC_LALT = 0x38, SC_LSHIFT = 0x2A, SC_LCTRL = 0x1D, SC_ESC = 0x0
 static const int WIN_WIRE_VK = 0x41;  // Win: scan 0x5B, но vk 0x41 — обход фильтра Win-клавиши
 
 static bool s_winDown = false, s_winCombo = false; static int s_winScan = 0x5B; static bool s_winExt = true;
+static ULONGLONG s_winDownTick = 0;
+static const ULONGLONG WIN_HOLD_MAX_MS = 30000;  // дольше — считаем, что up потерян
 static bool s_altSticky = false;  static int s_altScan = SC_LALT;  static bool s_altExt = false;
 static bool s_shiftSticky = false; static int s_shiftScan = SC_LSHIFT; static bool s_shiftExt = false;
 static HHOOK s_hook = NULL;
@@ -168,12 +171,16 @@ static bool Handle(WPARAM wParam, LPARAM lParam) {
     if (!down && !up) return false;
     int vk = kb->vkCode;
 
-    // Win мог быть отпущен, пока фокус был вне сессии — сверяемся с железом,
-    // иначе залипший s_winDown глотал бы посторонние клавиши. События самой
-    // Win-клавиши исключены: на её up железо уже показывает «отпущена»
-    // (async-состояние обновляется до вызова хука), и сброс здесь съел бы тап.
+    // Состояние Win ведём по событиям хука, а не по GetAsyncKeyState: Win-down
+    // мы глушим сами (return true), а заглушённая клавиша асинхронное состояние
+    // не обновляет вовсе — IsDown(VK_LWIN) остаётся ложью на всё удержание.
+    // Сверка с железом сбрасывала бы s_winDown на первой же клавише аккорда.
+    // От залипшего флага страхуют сброс в ветке !IsRemoteFocused() (любая
+    // клавиша вне сеанса снимает его) и таймаут: удержание дольше
+    // WIN_HOLD_MAX_MS означает потерянный up — например, Win отпустили на
+    // секретном рабочем столе UAC, куда хук не дотягивается.
     bool isWinKey = (vk == VK_LWIN || vk == VK_RWIN);
-    if (s_winDown && !isWinKey && !IsDown(VK_LWIN) && !IsDown(VK_RWIN)) { s_winDown = false; s_winCombo = false; }
+    if (s_winDown && GetTickCount64() - s_winDownTick > WIN_HOLD_MAX_MS) { s_winDown = false; s_winCombo = false; }
 
     // Пока Win зажат — любая клавиша идёт в аккорд; иначе только клавиши из списка.
     if (!s_winDown && !IsWatchedKey(vk)) return false;
@@ -194,7 +201,7 @@ static bool Handle(WPARAM wParam, LPARAM lParam) {
         return false;
     }
     if (g_fwdWin && isWinKey) {
-        if (down) { if (!s_winDown) { s_winDown = true; s_winCombo = false; s_winScan = sc; s_winExt = ext; } }
+        if (down) { if (!s_winDown) { s_winDown = true; s_winCombo = false; s_winScan = sc; s_winExt = ext; s_winDownTick = GetTickCount64(); } }
         else { if (s_winDown && !s_winCombo) SendWinTap(); s_winDown = false; }
         return true;
     }
@@ -287,7 +294,7 @@ static void HelpMode() {
     char exeU[MAX_PATH * 2];
     WideCharToMultiByte(CP_UTF8, 0, exe, -1, exeU, sizeof(exeU), NULL, NULL);
 
-    printf("\nrdpkey — проброс горячих клавиш в RDP RemoteApp\n\n");
+    printf("\nrdpkey " RDPKEY_VER " — проброс горячих клавиш в RDP RemoteApp\n\n");
     printf("Пробрасывает Win, Win+клавишу, Alt+Tab, Alt+Shift+Tab, Ctrl+Esc\n");
     printf("в полноэкранный RemoteApp-сеанс. В реестр себя не прописывает.\n\n");
     printf("Ассоциация с .rdp — вручную: правый клик по .rdp ->\n");
