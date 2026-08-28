@@ -57,18 +57,19 @@ var (
 	procMoveWindow              = user32.NewProc("MoveWindow")
 	procGetSysColorBrush        = user32.NewProc("GetSysColorBrush")
 	procAdjustWindowRectExForDpi = user32.NewProc("AdjustWindowRectExForDpi")
+	procGetDC                   = user32.NewProc("GetDC")
+	procReleaseDC               = user32.NewProc("ReleaseDC")
 
 	procGetCurrentProcessId = kernel32.NewProc("GetCurrentProcessId")
 	procGetModuleHandleW    = kernel32.NewProc("GetModuleHandleW")
 	procGetTickCount64      = kernel32.NewProc("GetTickCount64")
 
-	procCreateFontW    = gdi32.NewProc("CreateFontW")
-	procDeleteObject   = gdi32.NewProc("DeleteObject")
-	procSetBkMode      = gdi32.NewProc("SetBkMode")
-	procCreatePen      = gdi32.NewProc("CreatePen")
-	procSelectObject   = gdi32.NewProc("SelectObject")
-	procGetStockObject = gdi32.NewProc("GetStockObject")
-	procRoundRect      = gdi32.NewProc("RoundRect")
+	procCreateFontW           = gdi32.NewProc("CreateFontW")
+	procDeleteObject          = gdi32.NewProc("DeleteObject")
+	procSetBkMode             = gdi32.NewProc("SetBkMode")
+	procSetTextColor          = gdi32.NewProc("SetTextColor")
+	procSelectObject          = gdi32.NewProc("SelectObject")
+	procGetTextExtentPoint32W = gdi32.NewProc("GetTextExtentPoint32W")
 
 	procInitCommonControlsEx = comctl32.NewProc("InitCommonControlsEx")
 
@@ -98,9 +99,21 @@ const (
 
 	CW_USEDEFAULT = 0x80000000
 	TRANSPARENT   = 1
-	WM_PAINT      = 0x000F
-	PS_SOLID      = 0
-	NULL_BRUSH    = 5
+
+	WS_POPUP = 0x80000000
+
+	SS_NOTIFY = 0x00000100
+
+	// Тултип (comctl32).
+	TTS_ALWAYSTIP      = 0x01
+	TTS_NOPREFIX       = 0x02
+	TTF_IDISHWND       = 0x0001
+	TTF_SUBCLASS       = 0x0010
+	TTM_ACTIVATE       = 0x0401 // WM_USER+1
+	TTM_SETMAXTIPWIDTH = 0x0418 // WM_USER+24
+	TTM_ADDTOOLW       = 0x0432 // WM_USER+50
+	TTM_DELTOOLW       = 0x0433 // WM_USER+51
+	TTM_UPDATETIPTEXTW = 0x0439 // WM_USER+57
 
 	LLKHF_EXTENDED = 0x01
 	LLKHF_INJECTED = 0x10
@@ -194,6 +207,22 @@ type MONITORINFO struct {
 
 type POINT struct {
 	X, Y int32
+}
+
+type SIZE struct {
+	Cx, Cy int32
+}
+
+type TOOLINFO struct {
+	CbSize     uint32
+	UFlags     uint32
+	Hwnd       uintptr
+	UId        uintptr
+	Rect       RECT
+	Hinst      uintptr
+	LpszText   *uint16
+	LParam     uintptr
+	LpReserved uintptr
 }
 
 type MSG struct {
@@ -364,4 +393,26 @@ func messageBox(text, caption string, flags uint32) int {
 
 func shChangeNotifyAssoc() {
 	procSHChangeNotify.Call(SHCNE_ASSOCCHANGED, SHCNF_IDLIST, 0, 0)
+}
+
+// measureTextW: ширина строки в пикселях при заданном шрифте (экранный DC).
+func measureTextW(font uintptr, s string) int32 {
+	hdc, _, _ := procGetDC.Call(0)
+	if hdc == 0 {
+		return 0
+	}
+	defer procReleaseDC.Call(0, hdc)
+	old, _, _ := procSelectObject.Call(hdc, font)
+	defer procSelectObject.Call(hdc, old)
+	u, _ := windows.UTF16FromString(s)
+	n := len(u)
+	if n > 0 && u[n-1] == 0 {
+		n-- // без завершающего нуля
+	}
+	var sz SIZE
+	if n == 0 {
+		return 0
+	}
+	procGetTextExtentPoint32W.Call(hdc, uintptr(unsafe.Pointer(&u[0])), uintptr(n), uintptr(unsafe.Pointer(&sz)))
+	return sz.Cx
 }

@@ -1,21 +1,20 @@
 package main
 
 import (
+	"os"
 	"path/filepath"
 	"runtime"
 	"syscall"
+	"time"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
 )
 
 const (
-	idLaunch       = 100
-	idAssocChk     = 102
-	idUpdate       = 103
-	idHelp         = 104
-	idOpenDefaults = 105
-	idLastFile     = 300
+	idLaunch = 100
+	idHelp   = 104
+	idChange = 106
 )
 
 type hkItem struct {
@@ -33,19 +32,29 @@ var (
 	gGuiResult string
 	gWndStyle  uint32
 	gDPI       int
-	gAssocRect RECT
 	hMainWnd   uintptr
-	hLastFile  uintptr
-	hAssocChk  uintptr
 	faceBrush  uintptr
 	bigFont    uintptr
 	guiFont    uintptr
+
+	// Строка «Подключение к: …».
+	gHasConn    bool
+	hConnStatic uintptr
+	hChangeBtn  uintptr
+	hTooltip    uintptr
+	gExpiryWarn bool
+	gConnX      int32
+	gConnY      int32
+	gConnH      int32
+	gTipBuf     []uint16
 
 	hkItems []*hkItem
 	hkByID  = map[int]*hkItem{}
 
 	cbWndProc = syscall.NewCallback(wndProc)
 )
+
+func scDPI(v int) int32 { return int32(v * gDPI / 96) }
 
 func buildHkItems(cfg *Config) {
 	h := &cfg.Hotkeys
@@ -123,11 +132,24 @@ func checkVal(b bool) uintptr {
 	return BST_UNCHECKED
 }
 
-func lastFileLabel() string {
-	if gCfgPtr.LastRdpFile == "" {
-		return "Последний файл: —"
+func setWindowText(hwnd uintptr, s string) {
+	p, _ := windows.UTF16PtrFromString(s)
+	procSetWindowTextW.Call(hwnd, uintptr(unsafe.Pointer(p)))
+}
+
+func fileExists(p string) bool {
+	if p == "" {
+		return false
 	}
-	return "Последний файл: " + filepath.Base(gCfgPtr.LastRdpFile)
+	st, err := os.Stat(p)
+	return err == nil && !st.IsDir()
+}
+
+func boolTo(b bool) uintptr {
+	if b {
+		return 1
+	}
+	return 0
 }
 
 func updateWinSubEnable() {
@@ -135,11 +157,7 @@ func updateWinSubEnable() {
 	on := *master.field
 	for _, it := range hkItems {
 		if it.winSub {
-			en := uintptr(0)
-			if on {
-				en = 1
-			}
-			procEnableWindow.Call(it.hwnd, en)
+			procEnableWindow.Call(it.hwnd, boolTo(on))
 		}
 	}
 }
@@ -156,40 +174,103 @@ func adjustOuter(clientW, clientH int32, style uint32, dpi int) (int32, int32) {
 	return clientW + 16, clientH + 39 // грубая оценка рамки, если API нет
 }
 
+// connInfo: текст строки подключения, флаг «скоро истекает» и текст подсказки.
+// «до ДАТА» добавляется, только если дату удалось извлечь из подписи .rdp.
+func connInfo() (text string, warn bool, tip string) {
+	text = "Подключение к: " + filepath.Base(gCfgPtr.LastRdpFile)
+	if exp, ok := rdpSignatureExpiry(gCfgPtr.LastRdpFile); ok {
+		text += ", до " + formatDate(exp)
+		if time.Until(exp) <= 30*24*time.Hour {
+			warn = true
+			tip = "Срок действия файла удалёнки истекает " + formatDate(exp) +
+				". После этой даты подключение перестанет работать — запросите новый файл в службе поддержки."
+		}
+	}
+	return
+}
+
+func setupTooltip(hwnd uintptr, tip string, warn bool, add bool) {
+	if hTooltip == 0 {
+		cls, _ := windows.UTF16PtrFromString("tooltips_class32")
+		empty, _ := windows.UTF16PtrFromString("")
+		hTooltip, _, _ = procCreateWindowExW.Call(
+			0, uintptr(unsafe.Pointer(cls)), uintptr(unsafe.Pointer(empty)),
+			uintptr(WS_POPUP|TTS_ALWAYSTIP|TTS_NOPREFIX),
+			uintptr(CW_USEDEFAULT), uintptr(CW_USEDEFAULT), uintptr(CW_USEDEFAULT), uintptr(CW_USEDEFAULT),
+			hwnd, 0, getModuleHandle(), 0)
+	}
+	if hTooltip == 0 {
+		return
+	}
+	gTipBuf, _ = windows.UTF16FromString(tip) // держим буфер живым: тултип читает его позже
+	ti := TOOLINFO{
+		CbSize:   uint32(unsafe.Sizeof(TOOLINFO{})),
+		UFlags:   TTF_IDISHWND | TTF_SUBCLASS,
+		Hwnd:     hwnd,
+		UId:      hConnStatic,
+		Hinst:    getModuleHandle(),
+		LpszText: &gTipBuf[0],
+	}
+	msg := uint32(TTM_UPDATETIPTEXTW)
+	if add {
+		msg = TTM_ADDTOOLW
+	}
+	sendMessage(hTooltip, msg, 0, uintptr(unsafe.Pointer(&ti)))
+	sendMessage(hTooltip, TTM_SETMAXTIPWIDTH, 0, uintptr(scDPI(320)))
+	sendMessage(hTooltip, TTM_ACTIVATE, boolTo(warn), 0)
+}
+
+func createConnRow(hwnd uintptr) {
+	gConnX = scDPI(20)
+	gConnY = scDPI(116)
+	gConnH = scDPI(20)
+	text, warn, tip := connInfo()
+	gExpiryWarn = warn
+	tw := measureTextW(guiFont, text)
+	hConnStatic = createChild(hwnd, "STATIC", text, SS_NOTIFY,
+		gConnX, gConnY, tw+scDPI(4), gConnH, 0, guiFont)
+	cw := measureTextW(guiFont, "изменить") + scDPI(20)
+	hChangeBtn = createChild(hwnd, "BUTTON", "изменить",
+		BS_PUSHBUTTON|WS_TABSTOP, gConnX+tw+scDPI(10), gConnY-scDPI(3), cw, scDPI(24), idChange, guiFont)
+	setupTooltip(hwnd, tip, warn, true)
+}
+
+func applyConnRow(hwnd uintptr) {
+	if !gHasConn {
+		return
+	}
+	text, warn, tip := connInfo()
+	gExpiryWarn = warn
+	setWindowText(hConnStatic, text)
+	tw := measureTextW(guiFont, text)
+	procMoveWindow.Call(hConnStatic, uintptr(gConnX), uintptr(gConnY), uintptr(tw+scDPI(4)), uintptr(gConnH), 1)
+	cw := measureTextW(guiFont, "изменить") + scDPI(20)
+	procMoveWindow.Call(hChangeBtn, uintptr(gConnX+tw+scDPI(10)), uintptr(gConnY-scDPI(3)), uintptr(cw), uintptr(scDPI(24)), 1)
+	setupTooltip(hwnd, tip, warn, false)
+	procInvalidateRect.Call(hConnStatic, 0, 1)
+}
+
 func onCreate(hwnd uintptr) {
-	dpi := dpiForWindow(hwnd)
-	gDPI = dpi
-	sc := func(v int) int32 { return int32(v * dpi / 96) }
-	bigFont = makeFont(14, 600, dpi)
-	guiFont = makeFont(9, FW_NORMAL, dpi)
+	gDPI = dpiForWindow(hwnd)
+	bigFont = makeFont(14, 600, gDPI)
+	guiFont = makeFont(9, FW_NORMAL, gDPI)
 
 	const margin = 20
 	const btnW = 420
 
-	// Верхняя строка: версия слева, «Проверить обновления» справа.
 	createChild(hwnd, "STATIC", "rdpkey v"+appVersion, 0,
-		sc(margin), sc(15), sc(180), sc(20), 0, guiFont)
-	const updW = 175
-	createChild(hwnd, "BUTTON", "Проверить обновления",
-		BS_PUSHBUTTON|WS_TABSTOP, sc(margin+btnW-updW), sc(11), sc(updW), sc(26), idUpdate, guiFont)
+		scDPI(margin), scDPI(15), scDPI(180), scDPI(20), 0, guiFont)
 
-	// Большая кнопка запуска.
 	createChild(hwnd, "BUTTON", "Запустить удалёнку с пробросом клавиш",
-		BS_PUSHBUTTON|WS_TABSTOP, sc(margin), sc(46), sc(btnW), sc(56), idLaunch, bigFont)
+		BS_PUSHBUTTON|WS_TABSTOP, scDPI(margin), scDPI(46), scDPI(btnW), scDPI(56), idLaunch, bigFont)
 
-	// Ассоциация: чекбокс в синей рамке + кнопка к системным настройкам.
-	gAssocRect = RECT{sc(margin), sc(110), sc(margin + btnW), sc(142)}
-	hAssocChk = createChild(hwnd, "BUTTON", "Всегда открывать удалёнку с пробросом",
-		BS_AUTOCHECKBOX|WS_TABSTOP, sc(margin+14), sc(118), sc(btnW-28), sc(20), idAssocChk, guiFont)
-	sendMessage(hAssocChk, BM_SETCHECK, checkVal(associationRegistered()), 0)
+	y := 116
+	gHasConn = fileExists(gCfgPtr.LastRdpFile)
+	if gHasConn {
+		createConnRow(hwnd)
+		y = 150
+	}
 
-	createChild(hwnd, "BUTTON", "Открыть «Приложения по умолчанию» Windows",
-		BS_PUSHBUTTON|WS_TABSTOP, sc(margin), sc(150), sc(320), sc(26), idOpenDefaults, guiFont)
-
-	hLastFile = createChild(hwnd, "STATIC", lastFileLabel(), 0,
-		sc(margin), sc(186), sc(btnW), sc(20), idLastFile, guiFont)
-
-	y := 214
 	for _, it := range hkItems {
 		x := margin
 		w := btnW
@@ -198,18 +279,18 @@ func onCreate(hwnd uintptr) {
 			w -= 22
 		}
 		it.hwnd = createChild(hwnd, "BUTTON", it.label,
-			BS_AUTOCHECKBOX|WS_TABSTOP, sc(x), sc(y), sc(w), sc(22), it.id, guiFont)
+			BS_AUTOCHECKBOX|WS_TABSTOP, scDPI(x), scDPI(y), scDPI(w), scDPI(22), it.id, guiFont)
 		sendMessage(it.hwnd, BM_SETCHECK, checkVal(*it.field), 0)
 		y += 25
 	}
 	y += 6
 	createChild(hwnd, "BUTTON", "Как пользоваться?",
-		BS_PUSHBUTTON|WS_TABSTOP, sc(margin), sc(y), sc(200), sc(26), idHelp, guiFont)
+		BS_PUSHBUTTON|WS_TABSTOP, scDPI(margin), scDPI(y), scDPI(200), scDPI(26), idHelp, guiFont)
 	clientH := y + 26 + 14
 
 	updateWinSubEnable()
 
-	ow, oh := adjustOuter(sc(margin*2+btnW), sc(clientH), gWndStyle, dpi)
+	ow, oh := adjustOuter(scDPI(margin*2+btnW), scDPI(clientH), gWndStyle, gDPI)
 	scrW := int32(getSystemMetrics(SM_CXSCREEN))
 	scrH := int32(getSystemMetrics(SM_CYSCREEN))
 	procMoveWindow.Call(hwnd, uintptr((scrW-ow)/2), uintptr((scrH-oh)/2), uintptr(ow), uintptr(oh), 1)
@@ -232,7 +313,7 @@ func openRdpDialog(hwnd uintptr, initial string) (string, bool) {
 		}
 	}
 	filter := utf16Filter("RDP-файлы (*.rdp)", "*.rdp", "Все файлы (*.*)", "*.*")
-	title, _ := windows.UTF16PtrFromString("Выберите .rdp-файл")
+	title, _ := windows.UTF16PtrFromString("Выберите файл удаленки от работодателя")
 	defExt, _ := windows.UTF16PtrFromString("rdp")
 	var initDir *uint16
 	if initial != "" {
@@ -256,42 +337,55 @@ func openRdpDialog(hwnd uintptr, initial string) (string, bool) {
 	return windows.UTF16ToString(buf), true
 }
 
+// selectRdpFile: диалог выбора + проверка, что это RemoteApp-файл. Иначе ругаемся
+// и возвращаем ok=false (ничего не меняем).
+func selectRdpFile(hwnd uintptr, initial string) (string, bool) {
+	p, ok := openRdpDialog(hwnd, initial)
+	if !ok {
+		return "", false
+	}
+	text, err := readRdpText(p)
+	if err != nil {
+		messageBox("Не удалось прочитать выбранный файл.", "rdpkey", MB_ICONERROR)
+		return "", false
+	}
+	if !isRemoteAppRdp(text) {
+		messageBox("Это не файл удалёнки в режиме RemoteApp.\n\n"+
+			"Выберите .rdp-файл удалёнки, выданный работодателем.",
+			"rdpkey — неподходящий файл", MB_ICONERROR)
+		return "", false
+	}
+	return p, true
+}
+
+func launchOrPick(hwnd uintptr) {
+	last := gCfgPtr.LastRdpFile
+	if fileExists(last) {
+		gGuiResult = last
+		procDestroyWindow.Call(hwnd)
+		return
+	}
+	if p, ok := selectRdpFile(hwnd, last); ok {
+		gCfgPtr.LastRdpFile = p
+		gGuiResult = p
+		saveConfig(*gCfgPtr)
+		procDestroyWindow.Call(hwnd)
+	}
+}
+
 func onCommand(hwnd, wParam uintptr) {
 	id := int(uint16(wParam)) // LOWORD
 	switch id {
 	case idLaunch:
-		if p, ok := openRdpDialog(hwnd, gCfgPtr.LastRdpFile); ok {
+		launchOrPick(hwnd)
+	case idChange:
+		if p, ok := selectRdpFile(hwnd, gCfgPtr.LastRdpFile); ok {
 			gCfgPtr.LastRdpFile = p
-			gGuiResult = p
 			saveConfig(*gCfgPtr)
-			procDestroyWindow.Call(hwnd)
+			applyConnRow(hwnd)
 		}
-	case idUpdate:
-		openURL(releasesURL)
 	case idHelp:
 		openHelp()
-	case idOpenDefaults:
-		openURL("ms-settings:defaultapps")
-	case idAssocChk:
-		if sendMessage(hAssocChk, BM_GETCHECK, 0, 0) == BST_CHECKED {
-			if _, err := installAssociation(); err == nil {
-				gCfgPtr.Installed = true
-				saveConfig(*gCfgPtr)
-			} else {
-				sendMessage(hAssocChk, BM_SETCHECK, BST_UNCHECKED, 0)
-				messageBox("Не удалось зарегистрировать rdpkey для .rdp.\n\n"+
-					"Что попробовать:\n"+
-					"• Закрыть другие открытые окна rdpkey и нажать ещё раз.\n"+
-					"• Запускать rdpkey с локального диска (не из архива или сетевой папки).\n"+
-					"• Проверить доступ к папке %LOCALAPPDATA%\\rdpkey.\n\n"+
-					"Подробнее — кнопка «Как пользоваться?».",
-					"rdpkey — ошибка регистрации", MB_ICONERROR)
-			}
-		} else {
-			uninstallAssociation()
-			gCfgPtr.Installed = false
-			saveConfig(*gCfgPtr)
-		}
 	default:
 		if it, ok := hkByID[id]; ok {
 			*it.field = sendMessage(it.hwnd, BM_GETCHECK, 0, 0) == BST_CHECKED
@@ -309,27 +403,6 @@ func openURL(url string) {
 	procShellExecuteW.Call(0, uintptr(unsafe.Pointer(verb)), uintptr(unsafe.Pointer(u)), 0, 0, SW_SHOW)
 }
 
-// Синяя скруглённая рамка вокруг чекбокса ассоциации, чтобы он был заметен.
-func paintAssocFrame(hwnd uintptr) {
-	var ps PAINTSTRUCT
-	hdc, _, _ := procBeginPaint.Call(hwnd, uintptr(unsafe.Pointer(&ps)))
-	w := gDPI * 2 / 96
-	if w < 1 {
-		w = 1
-	}
-	pen, _, _ := procCreatePen.Call(PS_SOLID, uintptr(w), 0x00D77800) // RGB(0,120,215)
-	br, _, _ := procGetStockObject.Call(NULL_BRUSH)
-	oldPen, _, _ := procSelectObject.Call(hdc, pen)
-	oldBr, _, _ := procSelectObject.Call(hdc, br)
-	rad := uintptr(gDPI * 8 / 96)
-	procRoundRect.Call(hdc, uintptr(gAssocRect.Left), uintptr(gAssocRect.Top),
-		uintptr(gAssocRect.Right), uintptr(gAssocRect.Bottom), rad, rad)
-	procSelectObject.Call(hdc, oldPen)
-	procSelectObject.Call(hdc, oldBr)
-	procDeleteObject.Call(pen)
-	procEndPaint.Call(hwnd, uintptr(unsafe.Pointer(&ps)))
-}
-
 func wndProc(hwnd, msg, wParam, lParam uintptr) uintptr {
 	switch uint32(msg) {
 	case WM_CREATE:
@@ -338,10 +411,13 @@ func wndProc(hwnd, msg, wParam, lParam uintptr) uintptr {
 	case WM_COMMAND:
 		onCommand(hwnd, wParam)
 		return 0
-	case WM_PAINT:
-		paintAssocFrame(hwnd)
-		return 0
-	case WM_CTLCOLORSTATIC, WM_CTLCOLORBTN:
+	case WM_CTLCOLORSTATIC:
+		procSetBkMode.Call(wParam, TRANSPARENT)
+		if gExpiryWarn && lParam == hConnStatic {
+			procSetTextColor.Call(wParam, 0x000000FF) // RGB(255,0,0)
+		}
+		return faceBrush
+	case WM_CTLCOLORBTN:
 		procSetBkMode.Call(wParam, TRANSPARENT)
 		return faceBrush
 	case WM_CLOSE:
