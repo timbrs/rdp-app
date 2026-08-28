@@ -1,0 +1,113 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>rdpkey — как пользоваться</title>
+<style>
+  :root { color-scheme: light dark; }
+  * { box-sizing: border-box; }
+  body {
+    font-family: "Segoe UI", system-ui, sans-serif;
+    max-width: 780px; margin: 0 auto; padding: 32px 20px 64px;
+    line-height: 1.6; color: #1a1a1a; background: #fff;
+  }
+  @media (prefers-color-scheme: dark) {
+    body { color: #e6e6e6; background: #1e1e1e; }
+    .card { background: #2a2a2a !important; border-color: #3a3a3a !important; }
+    .warn { background: #2e2a1e !important; border-color: #6b5a1e !important; }
+    kbd { background: #3a3a3a !important; border-color: #555 !important; color: #fff !important; }
+    a { color: #6db3ff !important; }
+    td { border-color: #333 !important; }
+  }
+  h1 { font-size: 26px; margin: 0 0 4px; }
+  h2 { font-size: 19px; margin: 30px 0 10px; padding-bottom: 6px; border-bottom: 2px solid #0078d7; }
+  .lead { color: #888; margin: 0 0 8px; }
+  ol, ul { padding-left: 22px; }
+  li { margin: 9px 0; }
+  kbd {
+    display: inline-block; padding: 1px 7px; margin: 0 1px;
+    font-family: Consolas, monospace; font-size: 13px;
+    background: #f0f0f0; border: 1px solid #ccc; border-bottom-width: 2px;
+    border-radius: 5px; white-space: nowrap;
+  }
+  table { border-collapse: collapse; width: 100%; margin-top: 8px; }
+  td { padding: 7px 10px; border-bottom: 1px solid #e2e2e2; vertical-align: top; }
+  td:first-child { white-space: nowrap; width: 1%; }
+  .card {
+    background: #f6f9ff; border: 1px solid #d7e6fb; border-left: 4px solid #0078d7;
+    border-radius: 8px; padding: 12px 16px; margin: 16px 0;
+  }
+  .warn {
+    background: #fff8e6; border: 1px solid #f0e0a8; border-left: 4px solid #e0a800;
+    border-radius: 8px; padding: 12px 16px; margin: 16px 0;
+  }
+  b.k { color: #0078d7; }
+  .muted { color: #888; font-size: 14px; }
+</style>
+</head>
+<body>
+  <h1>rdpkey</h1>
+  <p class="lead">Проброс горячих клавиш в полноэкранный RDP RemoteApp.</p>
+
+  <div class="card">
+    <b>Зачем.</b> В обычном RemoteApp клавиши <kbd>Win</kbd>, <kbd>Alt</kbd>+<kbd>Tab</kbd>,
+    <kbd>Ctrl</kbd>+<kbd>Esc</kbd> срабатывают на вашем компьютере, а не в удалёнке.
+    rdpkey перехватывает их и отправляет в удалённый сеанс — <b>пока он развёрнут на весь экран</b>.
+  </div>
+
+  <h2>Запуск</h2>
+  <ol>
+    <li>Нажмите большую кнопку <b class="k">«Запустить удалёнку с пробросом клавиш»</b> и выберите свой <b>.rdp</b>.</li>
+    <li>Откроется удалёнка (mstsc). <b>Разверните её на весь экран</b> — проброс работает только в полном экране.</li>
+    <li>Горячие клавиши теперь уходят в удалёнку. Галочками включайте/выключайте отдельные сочетания.</li>
+  </ol>
+
+  <h2>Какие клавиши пробрасываются</h2>
+  <table>
+    <tr><td><kbd>Win</kbd></td><td>Открыть «Пуск» в удалёнке</td></tr>
+    <tr><td><kbd>Win</kbd>+<kbd>R</kbd> / <kbd>E</kbd> / <kbd>D</kbd></td><td>Выполнить / Проводник / Рабочий стол</td></tr>
+    <tr><td><kbd>Win</kbd>+<kbd>Tab</kbd> / <kbd>V</kbd></td><td>Представление задач / Журнал буфера обмена</td></tr>
+    <tr><td><kbd>Win</kbd>+<kbd>Z</kbd></td><td><b>Свернуть удалёнку</b> (локально прячет полноэкранное окно)</td></tr>
+    <tr><td><kbd>Alt</kbd>+<kbd>Tab</kbd> / <kbd>Alt</kbd>+<kbd>Shift</kbd>+<kbd>Tab</kbd></td><td>Переключение окон вперёд / назад</td></tr>
+    <tr><td><kbd>Ctrl</kbd>+<kbd>Esc</kbd></td><td>Открыть «Пуск»</td></tr>
+  </table>
+  <p class="muted"><kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>Esc</kbd> и <kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>Tab</kbd> намеренно остаются локальными.</p>
+
+  <h2>Открывать .rdp сразу через rdpkey</h2>
+  <p>Галочка <b class="k">«Всегда открывать удалёнку с пробросом»</b> (в синей рамке) <b>регистрирует</b> rdpkey
+     как приложение для файлов <b>.rdp</b> — после этого он появляется в списке <b>«Открыть с помощью»</b>.
+     Снять галочку — убрать регистрацию (файлы вернутся к обычному mstsc).</p>
+
+  <div class="warn">
+    <b>Важно про «по умолчанию».</b> Windows 10/11 <b>не разрешает</b> программе назначать себя приложением
+    по умолчанию (это защита от «угона» ассоциаций). Поэтому галочка только <b>регистрирует</b> rdpkey.
+    Чтобы <b>.rdp открывались по двойному клику</b> именно через rdpkey, назначьте его по умолчанию
+    <b>один раз вручную</b> — любым из способов:
+    <ul style="margin:10px 0 0">
+      <li><b>Правый клик</b> по любому <b>.rdp</b> → <b>«Открыть с помощью»</b> → <b>«Выбрать другое приложение»</b>
+          → выберите <b>RDP RemoteApp Hotkeys (rdpkey)</b> → отметьте <b>«Всегда»</b>.</li>
+      <li>Или кнопка <b class="k">«Открыть „Приложения по умолчанию“ Windows»</b> в окне rdpkey →
+          в поиске введите <b>.rdp</b> → выберите текущее приложение → укажите <b>rdpkey</b>.</li>
+    </ul>
+  </div>
+
+  <h2>Если что-то не работает</h2>
+  <ul>
+    <li><b>Не удалось зарегистрировать (.rdp).</b> Закройте другие окна rdpkey и нажмите галочку снова;
+        запускайте rdpkey с локального диска (не из архива или сетевой папки); проверьте доступ к папке
+        <code>%LOCALAPPDATA%\rdpkey</code>.</li>
+    <li><b>Горячие клавиши не проходят.</b> Убедитесь, что удалёнка развёрнута <b>на весь экран</b> —
+        в оконном режиме все комбинации остаются на вашем компьютере.</li>
+    <li><b>В списке «Открыть с помощью» несколько похожих приложений.</b> Наше называется
+        <b>«RDP RemoteApp Hotkeys»</b> и указывает на <code>rdpkey.exe</code>. Другие (например «rdphotkey»
+        или старые версии) можно убрать вручную.</li>
+    <li><b>Выбранное «по умолчанию» не сохраняется.</b> Это ограничение Windows 11 — назначайте через
+        правый клик → «Открыть с помощью» → «Выбрать другое приложение» → «Всегда», либо через
+        «Параметры → Приложения по умолчанию».</li>
+  </ul>
+
+  <p class="muted">rdpkey — локальная утилита: не отправляет ничего в сеть, не ведёт логов, обычный набор
+     текста не перехватывает (только сочетания с <kbd>Win</kbd> и <kbd>Alt</kbd>).</p>
+</body>
+</html>

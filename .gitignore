@@ -1,6 +1,4 @@
+*.syso
 builds/
-*.o
-*.obj
 *.exe
-*.res
-resources/_*.png
+virustotal.api.key
