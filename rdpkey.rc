@@ -6,8 +6,8 @@
 1 ICON "app.ico"
 
 VS_VERSION_INFO VERSIONINFO
- FILEVERSION    1,0,5,0
- PRODUCTVERSION 1,0,5,0
+ FILEVERSION    1,0,6,0
+ PRODUCTVERSION 1,0,6,0
  FILEFLAGSMASK  0x3fL
  FILEFLAGS      0x0L
  FILEOS         VOS_NT_WINDOWS32
@@ -20,12 +20,12 @@ BEGIN
         BEGIN
             VALUE "CompanyName",      "rdpkey"
             VALUE "FileDescription",  "RDP RemoteApp hotkey forwarder"
-            VALUE "FileVersion",      "1.0.5.0"
+            VALUE "FileVersion",      "1.0.6.0"
             VALUE "InternalName",     "rdpkey"
             VALUE "LegalCopyright",   "MIT License"
             VALUE "OriginalFilename", "rdpkey.exe"
             VALUE "ProductName",      "RDP RemoteApp Hotkeys"
-            VALUE "ProductVersion",   "1.0.5.0"
+            VALUE "ProductVersion",   "1.0.6.0"
         END
     END
     BLOCK "VarFileInfo"

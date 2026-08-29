@@ -21,10 +21,8 @@ type Hotkeys struct {
 }
 
 type Config struct {
-	Hotkeys        Hotkeys `json:"hotkeys"`
-	LastRdpFile    string  `json:"lastRdpFile"`
-	Installed      bool    `json:"installed"`
-	PromptAnswered bool    `json:"promptAnswered"`
+	Hotkeys     Hotkeys `json:"hotkeys"`
+	LastRdpFile string  `json:"lastRdpFile"`
 }
 
 func defaultConfig() Config {

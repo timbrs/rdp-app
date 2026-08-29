@@ -46,6 +46,7 @@ var (
 	gConnX      int32
 	gConnY      int32
 	gConnH      int32
+	gChangeW    int32 // измеренная ширина кнопки «изменить» (константа при данном шрифте)
 	gTipBuf     []uint16
 
 	hkItems []*hkItem
@@ -174,18 +175,39 @@ func adjustOuter(clientW, clientH int32, style uint32, dpi int) (int32, int32) {
 	return clientW + 16, clientH + 39 // грубая оценка рамки, если API нет
 }
 
-// connInfo: текст строки подключения, флаг «скоро истекает» и текст подсказки.
-// «до ДАТА» добавляется, только если дату удалось извлечь из подписи .rdp.
-func connInfo() (text string, warn bool, tip string) {
-	text = "Подключение к: " + filepath.Base(gCfgPtr.LastRdpFile)
-	if exp, ok := rdpSignatureExpiry(gCfgPtr.LastRdpFile); ok {
-		text += ", до " + formatDate(exp)
+// connInfo: текст строки подключения, флаг «скоро истекает» и текст подсказки
+// по уже прочитанному тексту .rdp (чтобы не читать файл повторно). «до ДАТА»
+// добавляется, только если дату удалось извлечь из подписи.
+func connInfo(rdpText string) (label string, warn bool, tip string) {
+	label = "Подключение к: " + filepath.Base(gCfgPtr.LastRdpFile)
+	if exp, ok := expiryFromText(rdpText); ok {
+		label += ", до " + formatDate(exp)
 		if time.Until(exp) <= 30*24*time.Hour {
 			warn = true
 			tip = "Срок действия файла удалёнки истекает " + formatDate(exp) +
 				". После этой даты подключение перестанет работать — запросите новый файл в службе поддержки."
 		}
 	}
+	return
+}
+
+// layoutConnRow: ширина статика с именем и X кнопки «изменить», зажатые так,
+// чтобы кнопка всегда оставалась внутри клиентской области (окно фиксированной
+// ширины, не растягивается). Длинное имя обрезается статиком (SS_ENDELLIPSIS).
+func layoutConnRow(label string) (staticW, btnX int32) {
+	if gChangeW == 0 {
+		gChangeW = measureTextW(guiFont, "изменить") + scDPI(20)
+	}
+	maxRight := scDPI(20 + 420) // margin + btnW — правый край контента
+	avail := maxRight - gConnX - scDPI(10) - gChangeW
+	if avail < scDPI(60) {
+		avail = scDPI(60)
+	}
+	staticW = measureTextW(guiFont, label) + scDPI(4)
+	if staticW > avail {
+		staticW = avail
+	}
+	btnX = gConnX + staticW + scDPI(10)
 	return
 }
 
@@ -202,7 +224,12 @@ func setupTooltip(hwnd uintptr, tip string, warn bool, add bool) {
 	if hTooltip == 0 {
 		return
 	}
-	gTipBuf, _ = windows.UTF16FromString(tip) // держим буфер живым: тултип читает его позже
+	// Держим буфер живым (тултип хранит указатель и читает его при наведении).
+	buf, err := windows.UTF16FromString(tip)
+	if err != nil || len(buf) == 0 {
+		buf = []uint16{0}
+	}
+	gTipBuf = buf
 	ti := TOOLINFO{
 		CbSize:   uint32(unsafe.Sizeof(TOOLINFO{})),
 		UFlags:   TTF_IDISHWND | TTF_SUBCLASS,
@@ -224,28 +251,29 @@ func createConnRow(hwnd uintptr) {
 	gConnX = scDPI(20)
 	gConnY = scDPI(116)
 	gConnH = scDPI(20)
-	text, warn, tip := connInfo()
+	rdpText, _ := readRdpText(gCfgPtr.LastRdpFile)
+	label, warn, tip := connInfo(rdpText)
 	gExpiryWarn = warn
-	tw := measureTextW(guiFont, text)
-	hConnStatic = createChild(hwnd, "STATIC", text, SS_NOTIFY,
-		gConnX, gConnY, tw+scDPI(4), gConnH, 0, guiFont)
-	cw := measureTextW(guiFont, "изменить") + scDPI(20)
+	staticW, btnX := layoutConnRow(label)
+	hConnStatic = createChild(hwnd, "STATIC", label, SS_NOTIFY|SS_ENDELLIPSIS,
+		gConnX, gConnY, staticW, gConnH, 0, guiFont)
 	hChangeBtn = createChild(hwnd, "BUTTON", "изменить",
-		BS_PUSHBUTTON|WS_TABSTOP, gConnX+tw+scDPI(10), gConnY-scDPI(3), cw, scDPI(24), idChange, guiFont)
+		BS_PUSHBUTTON|WS_TABSTOP, btnX, gConnY-scDPI(3), gChangeW, scDPI(24), idChange, guiFont)
 	setupTooltip(hwnd, tip, warn, true)
 }
 
-func applyConnRow(hwnd uintptr) {
+// applyConnRow перерисовывает строку по уже прочитанному тексту .rdp (без
+// повторного чтения файла).
+func applyConnRow(hwnd uintptr, rdpText string) {
 	if !gHasConn {
 		return
 	}
-	text, warn, tip := connInfo()
+	label, warn, tip := connInfo(rdpText)
 	gExpiryWarn = warn
-	setWindowText(hConnStatic, text)
-	tw := measureTextW(guiFont, text)
-	procMoveWindow.Call(hConnStatic, uintptr(gConnX), uintptr(gConnY), uintptr(tw+scDPI(4)), uintptr(gConnH), 1)
-	cw := measureTextW(guiFont, "изменить") + scDPI(20)
-	procMoveWindow.Call(hChangeBtn, uintptr(gConnX+tw+scDPI(10)), uintptr(gConnY-scDPI(3)), uintptr(cw), uintptr(scDPI(24)), 1)
+	setWindowText(hConnStatic, label)
+	staticW, btnX := layoutConnRow(label)
+	procMoveWindow.Call(hConnStatic, uintptr(gConnX), uintptr(gConnY), uintptr(staticW), uintptr(gConnH), 1)
+	procMoveWindow.Call(hChangeBtn, uintptr(btnX), uintptr(gConnY-scDPI(3)), uintptr(gChangeW), uintptr(scDPI(24)), 1)
 	setupTooltip(hwnd, tip, warn, false)
 	procInvalidateRect.Call(hConnStatic, 0, 1)
 }
@@ -338,34 +366,39 @@ func openRdpDialog(hwnd uintptr, initial string) (string, bool) {
 }
 
 // selectRdpFile: диалог выбора + проверка, что это RemoteApp-файл. Иначе ругаемся
-// и возвращаем ok=false (ничего не меняем).
-func selectRdpFile(hwnd uintptr, initial string) (string, bool) {
-	p, ok := openRdpDialog(hwnd, initial)
-	if !ok {
-		return "", false
+// и возвращаем ok=false (ничего не меняем). Возвращает и прочитанный текст .rdp,
+// чтобы вызывающий не читал файл повторно.
+func selectRdpFile(hwnd uintptr, initial string) (path, text string, ok bool) {
+	p, picked := openRdpDialog(hwnd, initial)
+	if !picked {
+		return "", "", false
 	}
-	text, err := readRdpText(p)
+	t, err := readRdpText(p)
 	if err != nil {
 		messageBox("Не удалось прочитать выбранный файл.", "rdpkey", MB_ICONERROR)
-		return "", false
+		return "", "", false
 	}
-	if !isRemoteAppRdp(text) {
+	if !isRemoteAppRdp(t) {
 		messageBox("Это не файл удалёнки в режиме RemoteApp.\n\n"+
 			"Выберите .rdp-файл удалёнки, выданный работодателем.",
 			"rdpkey — неподходящий файл", MB_ICONERROR)
-		return "", false
+		return "", "", false
 	}
-	return p, true
+	return p, t, true
 }
 
 func launchOrPick(hwnd uintptr) {
 	last := gCfgPtr.LastRdpFile
+	// Запомненный файл запускаем сразу, но только если он ещё читается и остался
+	// RemoteApp (мог быть отредактирован, или это конфиг от старой версии без проверки).
 	if fileExists(last) {
-		gGuiResult = last
-		procDestroyWindow.Call(hwnd)
-		return
+		if text, err := readRdpText(last); err == nil && isRemoteAppRdp(text) {
+			gGuiResult = last
+			procDestroyWindow.Call(hwnd)
+			return
+		}
 	}
-	if p, ok := selectRdpFile(hwnd, last); ok {
+	if p, _, ok := selectRdpFile(hwnd, last); ok {
 		gCfgPtr.LastRdpFile = p
 		gGuiResult = p
 		saveConfig(*gCfgPtr)
@@ -379,10 +412,10 @@ func onCommand(hwnd, wParam uintptr) {
 	case idLaunch:
 		launchOrPick(hwnd)
 	case idChange:
-		if p, ok := selectRdpFile(hwnd, gCfgPtr.LastRdpFile); ok {
+		if p, text, ok := selectRdpFile(hwnd, gCfgPtr.LastRdpFile); ok {
 			gCfgPtr.LastRdpFile = p
 			saveConfig(*gCfgPtr)
-			applyConnRow(hwnd)
+			applyConnRow(hwnd, text)
 		}
 	case idHelp:
 		openHelp()

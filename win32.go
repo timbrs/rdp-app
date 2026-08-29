@@ -44,8 +44,6 @@ var (
 	procShowWindow              = user32.NewProc("ShowWindow")
 	procShowWindowAsync         = user32.NewProc("ShowWindowAsync")
 	procUpdateWindow            = user32.NewProc("UpdateWindow")
-	procBeginPaint              = user32.NewProc("BeginPaint")
-	procEndPaint                = user32.NewProc("EndPaint")
 	procInvalidateRect          = user32.NewProc("InvalidateRect")
 	procLoadCursorW             = user32.NewProc("LoadCursorW")
 	procLoadIconW               = user32.NewProc("LoadIconW")
@@ -65,7 +63,6 @@ var (
 	procGetTickCount64      = kernel32.NewProc("GetTickCount64")
 
 	procCreateFontW           = gdi32.NewProc("CreateFontW")
-	procDeleteObject          = gdi32.NewProc("DeleteObject")
 	procSetBkMode             = gdi32.NewProc("SetBkMode")
 	procSetTextColor          = gdi32.NewProc("SetTextColor")
 	procSelectObject          = gdi32.NewProc("SelectObject")
@@ -102,7 +99,8 @@ const (
 
 	WS_POPUP = 0x80000000
 
-	SS_NOTIFY = 0x00000100
+	SS_NOTIFY      = 0x00000100
+	SS_ENDELLIPSIS = 0x00004000
 
 	// Тултип (comctl32).
 	TTS_ALWAYSTIP      = 0x01
@@ -112,7 +110,6 @@ const (
 	TTM_ACTIVATE       = 0x0401 // WM_USER+1
 	TTM_SETMAXTIPWIDTH = 0x0418 // WM_USER+24
 	TTM_ADDTOOLW       = 0x0432 // WM_USER+50
-	TTM_DELTOOLW       = 0x0433 // WM_USER+51
 	TTM_UPDATETIPTEXTW = 0x0439 // WM_USER+57
 
 	LLKHF_EXTENDED = 0x01
@@ -232,15 +229,6 @@ type MSG struct {
 	LParam  uintptr
 	Time    uint32
 	Pt      POINT
-}
-
-type PAINTSTRUCT struct {
-	Hdc         uintptr
-	FErase      int32
-	RcPaint     RECT
-	FRestore    int32
-	FIncUpdate  int32
-	RgbReserved [32]byte
 }
 
 type WNDCLASSEX struct {

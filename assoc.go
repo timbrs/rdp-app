@@ -49,14 +49,33 @@ func regSetString(path, name, value string) error {
 	return k.SetStringValue(name, value)
 }
 
+// sameSize: обе цели существуют и одного размера (дешёвый признак «копия
+// актуальна» — при смене версии размер exe меняется).
+func sameSize(a, b string) bool {
+	sa, err := os.Stat(a)
+	if err != nil {
+		return false
+	}
+	sb, err := os.Stat(b)
+	if err != nil {
+		return false
+	}
+	return sa.Size() == sb.Size()
+}
+
 // Копирует exe в LocalAppData и регистрирует rdpkey для .rdp (только HKCU:
 // прогид + список «Открыть с помощью»). Проверяет запись; при неуспехе — ошибка.
+// Идемпотентно: если уже зарегистрированы и установленная копия совпадает с
+// текущим exe по размеру — сразу выходим (вызывается на каждом запуске GUI).
 func installAssociation() (string, error) {
 	cur, err := os.Executable()
 	if err != nil {
 		return "", err
 	}
 	target := installedExePath()
+	if associationRegistered() && sameSize(cur, target) {
+		return target, nil
+	}
 	if !strings.EqualFold(cur, target) {
 		if err := copyFile(cur, target); err != nil {
 			// Целевой exe может быть занят (запущен через ассоциацию). Если копия
@@ -99,27 +118,4 @@ func associationRegistered() bool {
 	return err == nil
 }
 
-func deleteKeyRecursive(root registry.Key, path string) {
-	k, err := registry.OpenKey(root, path, registry.READ)
-	if err != nil {
-		return
-	}
-	subs, _ := k.ReadSubKeyNames(-1)
-	k.Close()
-	for _, s := range subs {
-		deleteKeyRecursive(root, path+`\`+s)
-	}
-	registry.DeleteKey(root, path)
-}
-
-// Снимает ассоциацию .rdp: удаляет наши HKCU-ключи, .rdp возвращается к mstsc.
-func uninstallAssociation() {
-	deleteKeyRecursive(registry.CURRENT_USER, `Software\Classes\`+progID)
-	if k, err := registry.OpenKey(registry.CURRENT_USER, `Software\Classes\.rdp\OpenWithProgids`, registry.SET_VALUE); err == nil {
-		k.DeleteValue(progID)
-		k.Close()
-	}
-	deleteKeyRecursive(registry.CURRENT_USER, `Software\Classes\Applications\rdpkey.exe`)
-	shChangeNotifyAssoc()
-}
 
