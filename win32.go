@@ -59,6 +59,7 @@ var (
 	procAdjustWindowRectExForDpi = user32.NewProc("AdjustWindowRectExForDpi")
 	procGetDC                   = user32.NewProc("GetDC")
 	procReleaseDC               = user32.NewProc("ReleaseDC")
+	procDrawTextW               = user32.NewProc("DrawTextW")
 
 	procGetCurrentProcessId = kernel32.NewProc("GetCurrentProcessId")
 	procGetModuleHandleW    = kernel32.NewProc("GetModuleHandleW")
@@ -98,6 +99,10 @@ const (
 
 	CW_USEDEFAULT = 0x80000000
 	TRANSPARENT   = 1
+
+	DT_WORDBREAK = 0x0010
+	DT_CALCRECT  = 0x0400
+	DT_NOPREFIX  = 0x0800
 
 	WS_POPUP = 0x80000000
 

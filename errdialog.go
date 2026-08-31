@@ -35,35 +35,61 @@ func countdownText(sec int) string {
 	return fmt.Sprintf("Закрыть можно будет через %d с", sec)
 }
 
+// measureTextHeight: высота многострочного текста при заданной ширине (перенос
+// по словам) в пикселях устройства — чтобы окно точно вмещало весь текст.
+func measureTextHeight(hwnd, font uintptr, s string, width int32) int32 {
+	hdc, _, _ := procGetDC.Call(hwnd)
+	if hdc == 0 {
+		return width // маловероятный фолбэк
+	}
+	defer procReleaseDC.Call(hwnd, hdc)
+	old, _, _ := procSelectObject.Call(hdc, font)
+	defer procSelectObject.Call(hdc, old)
+	u, _ := windows.UTF16FromString(s)
+	n := len(u)
+	if n > 0 && u[n-1] == 0 {
+		n--
+	}
+	if n == 0 {
+		return 0
+	}
+	rc := RECT{0, 0, width, 0}
+	procDrawTextW.Call(hdc, uintptr(unsafe.Pointer(&u[0])), uintptr(n),
+		uintptr(unsafe.Pointer(&rc)), uintptr(DT_CALCRECT|DT_WORDBREAK|DT_NOPREFIX))
+	return rc.Bottom - rc.Top
+}
+
 func errOnCreate(hwnd uintptr) {
 	errRemaining = errLockSeconds
 	errDPI = dpiForWindow(hwnd)
 	font := makeFont(10, FW_NORMAL, errDPI)
 	errFaceBrush, _, _ = procGetSysColorBrush.Call(COLOR_BTNFACE)
 
-	const w = 480
-	const clientH = 230
+	const w = 520
+	sc := errSc
+	textX, textY, textW := sc(70), sc(22), sc(w-92)
 
 	// Системная иконка предупреждения.
 	icon, _, _ := procLoadIconW.Call(0, IDI_WARNING)
-	hIco := createChild(hwnd, "STATIC", "", SS_ICON, errSc(22), errSc(24), errSc(32), errSc(32), 0, 0)
+	hIco := createChild(hwnd, "STATIC", "", SS_ICON, sc(22), sc(24), sc(32), sc(32), 0, 0)
 	sendMessage(hIco, STM_SETICON, icon, 0)
 
-	// Текст сообщения (многострочный).
-	createChild(hwnd, "STATIC", errBody, 0, errSc(70), errSc(22), errSc(w-92), errSc(150), 0, font)
+	// Высота текста под ширину — окно подстраивается, ничего не обрезается.
+	textH := measureTextHeight(hwnd, font, errBody, textW)
+	createChild(hwnd, "STATIC", errBody, 0, textX, textY, textW, textH, 0, font)
 
-	// Обратный отсчёт (слева внизу, приглушённо).
+	// Ряд «отсчёт слева / кнопка справа» под текстом.
+	rowY := textY + textH + sc(18)
 	hErrCountdown = createChild(hwnd, "STATIC", countdownText(errRemaining), 0,
-		errSc(22), errSc(clientH-38), errSc(200), errSc(20), 0, font)
-
-	// Кнопка «Закрыть» — изначально неактивна.
+		sc(22), rowY+sc(6), sc(260), sc(20), 0, font)
 	const bw = 110
 	hErrBtn = createChild(hwnd, "BUTTON", "Закрыть",
-		BS_PUSHBUTTON|WS_TABSTOP|WS_DISABLED, errSc(w-bw-20), errSc(clientH-44), errSc(bw), errSc(30), 1, font)
+		BS_PUSHBUTTON|WS_TABSTOP|WS_DISABLED, sc(w-bw-20), rowY, sc(bw), sc(30), 1, font)
 
 	procSetTimer.Call(hwnd, 1, 1000, 0)
 
-	ow, oh := adjustOuter(errSc(w), errSc(clientH), errWndStyle, errDPI)
+	clientH := rowY + sc(30) + sc(14)
+	ow, oh := adjustOuter(sc(w), clientH, errWndStyle, errDPI)
 	scrW := int32(getSystemMetrics(SM_CXSCREEN))
 	scrH := int32(getSystemMetrics(SM_CYSCREEN))
 	procMoveWindow.Call(hwnd, uintptr((scrW-ow)/2), uintptr((scrH-oh)/2), uintptr(ow), uintptr(oh), 1)

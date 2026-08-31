@@ -2,7 +2,7 @@ package main
 
 import "os"
 
-const appVersion = "1.0.7"
+const appVersion = "1.0.8"
 
 // Аргумент — путь .rdp, переданный ассоциацией/двойным кликом. Go уже разобрал
 // кавычки, так что путь целиком лежит в os.Args[1].
