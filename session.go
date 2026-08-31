@@ -42,6 +42,10 @@ func mstscPath() string {
 func runSession(rdp string, hk Hotkeys) {
 	gHotkeys = hk
 
+	// Проверка персонального сертификата — при ЛЮБОМ подключении, в т.ч. запуск
+	// по ассоциации (двойной клик .rdp), когда GUI не открывается.
+	warnIfPersonalCertExpiring()
+
 	mstsc := mstscPath()
 	var cmd *exec.Cmd
 	if rdp != "" {

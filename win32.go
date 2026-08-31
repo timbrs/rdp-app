@@ -36,6 +36,8 @@ var (
 	procIsWindowVisible         = user32.NewProc("IsWindowVisible")
 	procGetAsyncKeyState        = user32.NewProc("GetAsyncKeyState")
 	procSetTimer                = user32.NewProc("SetTimer")
+	procKillTimer               = user32.NewProc("KillTimer")
+	procSetForegroundWindow     = user32.NewProc("SetForegroundWindow")
 	procMessageBoxW             = user32.NewProc("MessageBoxW")
 	procRegisterClassExW        = user32.NewProc("RegisterClassExW")
 	procCreateWindowExW         = user32.NewProc("CreateWindowExW")
@@ -100,7 +102,14 @@ const (
 	WS_POPUP = 0x80000000
 
 	SS_NOTIFY      = 0x00000100
+	SS_ICON        = 0x00000003
 	SS_ENDELLIPSIS = 0x00004000
+
+	STM_SETICON = 0x0170
+	IDI_ERROR   = 32513
+	IDI_WARNING = 32515
+
+	WS_EX_TOPMOST = 0x00000008
 
 	// Тултип (comctl32).
 	TTS_ALWAYSTIP      = 0x01
@@ -146,6 +155,7 @@ const (
 	WS_CAPTION      = 0x00C00000
 	WS_SYSMENU      = 0x00080000
 	WS_MINIMIZEBOX  = 0x00020000
+	WS_DISABLED     = 0x08000000
 	WS_OVERLAPPEDWINDOW = 0x00CF0000
 
 	SW_SHOW     = 5
