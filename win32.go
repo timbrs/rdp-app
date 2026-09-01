@@ -61,9 +61,10 @@ var (
 	procReleaseDC               = user32.NewProc("ReleaseDC")
 	procDrawTextW               = user32.NewProc("DrawTextW")
 
-	procGetCurrentProcessId = kernel32.NewProc("GetCurrentProcessId")
-	procGetModuleHandleW    = kernel32.NewProc("GetModuleHandleW")
-	procGetTickCount64      = kernel32.NewProc("GetTickCount64")
+	procGetCurrentProcessId       = kernel32.NewProc("GetCurrentProcessId")
+	procGetModuleHandleW          = kernel32.NewProc("GetModuleHandleW")
+	procGetTickCount64            = kernel32.NewProc("GetTickCount64")
+	procExpandEnvironmentStringsW = kernel32.NewProc("ExpandEnvironmentStringsW")
 
 	procCreateFontW           = gdi32.NewProc("CreateFontW")
 	procSetBkMode             = gdi32.NewProc("SetBkMode")
@@ -75,9 +76,8 @@ var (
 
 	procGetOpenFileNameW = comdlg32.NewProc("GetOpenFileNameW")
 
-	procSHChangeNotify  = shell32.NewProc("SHChangeNotify")
-	procSHOpenWithDialog = shell32.NewProc("SHOpenWithDialog")
-	procShellExecuteW   = shell32.NewProc("ShellExecuteW")
+	procSHChangeNotify = shell32.NewProc("SHChangeNotify")
+	procShellExecuteW  = shell32.NewProc("ShellExecuteW")
 )
 
 const (
@@ -130,6 +130,7 @@ const (
 	LLKHF_INJECTED = 0x10
 
 	VK_TAB      = 0x09
+	VK_SNAPSHOT = 0x2C // PrintScreen
 	VK_SHIFT    = 0x10
 	VK_CONTROL  = 0x11
 	VK_MENU     = 0x12
@@ -310,6 +311,36 @@ func getModuleHandle() uintptr {
 	return r
 }
 
+// shChangeNotifyAssoc — сообщить оболочке, что ассоциации изменились (чтобы
+// «Открыть с помощью» обновился без перезапуска Explorer).
+func shChangeNotifyAssoc() {
+	procSHChangeNotify.Call(SHCNE_ASSOCCHANGED, SHCNF_IDLIST, 0, 0)
+}
+
+// expandEnv раскрывает виндовые переменные окружения вида %VAR% (%USERPROFILE%,
+// %USERNAME%, %LOCALAPPDATA% и т.п.). Go-шный os.ExpandEnv понимает только $VAR,
+// поэтому идём через WinAPI. Нераспознанные %VAR% остаются как есть.
+func expandEnv(s string) string {
+	if s == "" || !strings.Contains(s, "%") {
+		return s
+	}
+	in, err := windows.UTF16PtrFromString(s)
+	if err != nil {
+		return s
+	}
+	n, _, _ := procExpandEnvironmentStringsW.Call(uintptr(unsafe.Pointer(in)), 0, 0)
+	if n == 0 {
+		return s
+	}
+	buf := make([]uint16, n)
+	r, _, _ := procExpandEnvironmentStringsW.Call(
+		uintptr(unsafe.Pointer(in)), uintptr(unsafe.Pointer(&buf[0])), n)
+	if r == 0 {
+		return s
+	}
+	return windows.UTF16ToString(buf)
+}
+
 func getTickCount64() uint64 {
 	r, _, _ := procGetTickCount64.Call()
 	return uint64(r)
@@ -392,10 +423,6 @@ func messageBox(text, caption string, flags uint32) int {
 	c, _ := windows.UTF16PtrFromString(caption)
 	r, _, _ := procMessageBoxW.Call(0, uintptr(unsafe.Pointer(t)), uintptr(unsafe.Pointer(c)), uintptr(flags))
 	return int(r)
-}
-
-func shChangeNotifyAssoc() {
-	procSHChangeNotify.Call(SHCNE_ASSOCCHANGED, SHCNF_IDLIST, 0, 0)
 }
 
 // measureTextW: ширина строки в пикселях при заданном шрифте (экранный DC).

@@ -156,18 +156,23 @@ func isWatchedKey(vk int) bool {
 	case VK_LWIN, VK_RWIN,
 		VK_MENU, VK_LMENU, VK_RMENU,
 		VK_SHIFT, VK_LSHIFT, VK_RSHIFT,
-		VK_TAB, VK_ESCAPE:
+		VK_TAB, VK_ESCAPE, VK_SNAPSHOT:
 		return true
 	}
 	return false
 }
 
+// isModifierKey — только клавиши-модификаторы (Ctrl/Alt/Shift/Win). Отдельно от
+// isWatchedKey: PrintScreen тоже наблюдаемая, но модификатором НЕ является.
 func isModifierKey(vk int) bool {
 	switch vk {
-	case VK_CONTROL, VK_LCONTROL, VK_RCONTROL:
+	case VK_CONTROL, VK_LCONTROL, VK_RCONTROL,
+		VK_MENU, VK_LMENU, VK_RMENU,
+		VK_SHIFT, VK_LSHIFT, VK_RSHIFT,
+		VK_LWIN, VK_RWIN:
 		return true
 	}
-	return isWatchedKey(vk) && vk != VK_TAB && vk != VK_ESCAPE
+	return false
 }
 
 func modMask() int {
@@ -245,6 +250,19 @@ func sendWinChord(scan int, ext bool, vk int) {
 		{winScan, false, winExt, winWireVK, false},
 		{scan, false, ext, vk, false},
 		{scan, true, ext, vk, false},
+		{winScan, true, winExt, winWireVK, false},
+	})
+}
+
+// sendWinShiftChord: Win+Shift+<vk> (для Win+Shift+S — область экрана/ножницы).
+// Shift включаем в аккорд явно (в отличие от sendWinChord).
+func sendWinShiftChord(scan int, ext bool, vk int) {
+	postSeq([]Scan{
+		{winScan, false, winExt, winWireVK, false},
+		{shiftScan, false, shiftExt, VK_SHIFT, false},
+		{scan, false, ext, vk, false},
+		{scan, true, ext, vk, false},
+		{shiftScan, true, shiftExt, VK_SHIFT, false},
 		{winScan, true, winExt, winWireVK, false},
 	})
 }
@@ -374,12 +392,28 @@ func handle(wParam uintptr, kb *KBDLLHOOKSTRUCT) bool {
 			winCombo = true
 			if gHotkeys.WinZ && vk == 0x5A { // Win+Z — свернуть удалёнку локально, не форвардим
 				minimizeRemote()
+			} else if vk == 0x53 && isDown(VK_SHIFT) { // Win+Shift+S — область экрана (ножницы)
+				if gHotkeys.WinShiftS {
+					sendWinShiftChord(sc, ext, vk)
+				}
 			} else if winComboAllowed(vk) {
 				// Выключенный под-флаг Win+<кл> при включённом мастере: глушим (no-op).
 				sendWinChord(sc, ext, vk)
 			}
 		}
 		return true
+	}
+	if vk == VK_SNAPSHOT { // PrintScreen без Win — снимок экрана В сессии
+		if !gHotkeys.PrintScreen {
+			return false
+		}
+		if down {
+			postSeq([]Scan{
+				{sc, false, ext, VK_SNAPSHOT, false},
+				{sc, true, ext, VK_SNAPSHOT, false},
+			})
+		}
+		return true // глушим локально, иначе снимок ЛОКАЛЬНОГО экрана
 	}
 	if vk == VK_TAB {
 		m := modMask()

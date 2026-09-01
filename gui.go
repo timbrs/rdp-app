@@ -57,6 +57,11 @@ var (
 
 func scDPI(v int) int32 { return int32(v * gDPI / 96) }
 
+// lastRdp: запомненный путь .rdp с раскрытыми %VAR% (%USERPROFILE% и т.п.) — для
+// файловых операций и запуска. В gCfgPtr.LastRdpFile хранится СЫРОЕ значение,
+// чтобы шаблон с переменными пережил сохранение конфига.
+func lastRdp() string { return expandEnv(gCfgPtr.LastRdpFile) }
+
 func buildHkItems(cfg *Config) {
 	h := &cfg.Hotkeys
 	hkItems = []*hkItem{
@@ -66,11 +71,13 @@ func buildHkItems(cfg *Config) {
 		{id: 203, label: "Win+D — показать рабочий стол", field: &h.WinD, indent: true, winSub: true},
 		{id: 204, label: "Win+Tab — представление задач", field: &h.WinTab, indent: true, winSub: true},
 		{id: 205, label: "Win+V — журнал буфера обмена", field: &h.WinV, indent: true, winSub: true},
+		{id: 211, label: "Win+Shift+S — скриншот области (Ножницы)", field: &h.WinShiftS, indent: true, winSub: true},
 		{id: 210, label: "Win+Z — свернуть удалёнку (локально)", field: &h.WinZ, indent: true, winSub: true},
 		{id: 206, label: "Win+<прочие клавиши>", field: &h.WinOther, indent: true, winSub: true},
 		{id: 207, label: "Ctrl+Esc — открыть «Пуск»", field: &h.CtrlEsc},
 		{id: 208, label: "Alt+Tab — переключение окон", field: &h.AltTab},
 		{id: 209, label: "Alt+Shift+Tab — переключение назад", field: &h.AltShiftTab},
+		{id: 212, label: "PrintScreen — скриншот всего экрана", field: &h.PrintScreen},
 	}
 	hkByID = map[int]*hkItem{}
 	for _, it := range hkItems {
@@ -179,7 +186,7 @@ func adjustOuter(clientW, clientH int32, style uint32, dpi int) (int32, int32) {
 // по уже прочитанному тексту .rdp (чтобы не читать файл повторно). «до ДАТА»
 // добавляется, только если дату удалось извлечь из подписи.
 func connInfo(rdpText string) (label string, warn bool, tip string) {
-	label = "Подключение к: " + filepath.Base(gCfgPtr.LastRdpFile)
+	label = "Подключение к: " + filepath.Base(lastRdp())
 	if exp, ok := expiryFromText(rdpText); ok {
 		label += ", до " + formatDate(exp)
 		if time.Until(exp) <= 30*24*time.Hour {
@@ -251,7 +258,7 @@ func createConnRow(hwnd uintptr) {
 	gConnX = scDPI(20)
 	gConnY = scDPI(116)
 	gConnH = scDPI(20)
-	rdpText, _ := readRdpText(gCfgPtr.LastRdpFile)
+	rdpText, _ := readRdpText(lastRdp())
 	label, warn, tip := connInfo(rdpText)
 	gExpiryWarn = warn
 	staticW, btnX := layoutConnRow(label)
@@ -293,7 +300,7 @@ func onCreate(hwnd uintptr) {
 		BS_PUSHBUTTON|WS_TABSTOP, scDPI(margin), scDPI(46), scDPI(btnW), scDPI(56), idLaunch, bigFont)
 
 	y := 116
-	gHasConn = fileExists(gCfgPtr.LastRdpFile)
+	gHasConn = fileExists(lastRdp())
 	if gHasConn {
 		createConnRow(hwnd)
 		y = 150
@@ -388,7 +395,7 @@ func selectRdpFile(hwnd uintptr, initial string) (path, text string, ok bool) {
 }
 
 func launchOrPick(hwnd uintptr) {
-	last := gCfgPtr.LastRdpFile
+	last := lastRdp()
 	// Запомненный файл запускаем сразу, но только если он ещё читается и остался
 	// RemoteApp (мог быть отредактирован, или это конфиг от старой версии без проверки).
 	if fileExists(last) {
@@ -412,7 +419,7 @@ func onCommand(hwnd, wParam uintptr) {
 	case idLaunch:
 		launchOrPick(hwnd)
 	case idChange:
-		if p, text, ok := selectRdpFile(hwnd, gCfgPtr.LastRdpFile); ok {
+		if p, text, ok := selectRdpFile(hwnd, lastRdp()); ok {
 			gCfgPtr.LastRdpFile = p
 			saveConfig(*gCfgPtr)
 			applyConnRow(hwnd, text)

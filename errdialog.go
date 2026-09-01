@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"runtime"
+	"strings"
 	"syscall"
 	"unsafe"
 
@@ -14,6 +15,7 @@ import (
 // осталось — чтобы пользователь понимал, а не пугался. Обычное окно (НЕ поверх
 // всех окон).
 const errLockSeconds = 5
+const errRed = 0x000000C8 // COLORREF (0x00BBGGRR): насыщенный красный, R=200
 
 var (
 	hErrBtn       uintptr
@@ -23,6 +25,7 @@ var (
 	errWndStyle   uint32
 	errDPI        int
 	errFaceBrush  uintptr
+	errRedStatics map[uintptr]bool // HWND красных STATIC-фрагментов
 	cbErrProc     = syscall.NewCallback(errWndProc)
 )
 
@@ -62,24 +65,59 @@ func measureTextHeight(hwnd, font uintptr, s string, width int32) int32 {
 func errOnCreate(hwnd uintptr) {
 	errRemaining = errLockSeconds
 	errDPI = dpiForWindow(hwnd)
+	errRedStatics = map[uintptr]bool{}
 	font := makeFont(10, FW_NORMAL, errDPI)
 	errFaceBrush, _, _ = procGetSysColorBrush.Call(COLOR_BTNFACE)
 
-	const w = 520
+	const w = 560
 	sc := errSc
 	textX, textY, textW := sc(70), sc(22), sc(w-92)
+	lineH := measureTextHeight(hwnd, font, "Ag", sc(4000))
+	if lineH <= 0 {
+		lineH = sc(18)
+	}
 
-	// Системная иконка предупреждения.
+	// Иконка предупреждения.
 	icon, _, _ := procLoadIconW.Call(0, IDI_WARNING)
 	hIco := createChild(hwnd, "STATIC", "", SS_ICON, sc(22), sc(24), sc(32), sc(32), 0, 0)
 	sendMessage(hIco, STM_SETICON, icon, 0)
 
-	// Высота текста под ширину — окно подстраивается, ничего не обрезается.
-	textH := measureTextHeight(hwnd, font, errBody, textW)
-	createChild(hwnd, "STATIC", errBody, 0, textX, textY, textW, textH, 0, font)
+	// Текст по строкам. '\x01' помечает красные фрагменты (дата, «истёк»).
+	// Строка без маркеров — один STATIC с переносом по словам (высота считается).
+	// Строка с маркерами — набор STATIC в ряд: метка чёрным, значение красным.
+	y := textY
+	for _, line := range strings.Split(errBody, "\n") {
+		if line == "" {
+			y += lineH // пустая строка — вертикальный отступ
+			continue
+		}
+		runs := strings.Split(line, "\x01")
+		if len(runs) == 1 {
+			h := measureTextHeight(hwnd, font, line, textW)
+			if h < lineH {
+				h = lineH
+			}
+			createChild(hwnd, "STATIC", line, 0, textX, y, textW, h, 0, font)
+			y += h
+		} else {
+			x := textX
+			for i, r := range runs {
+				if r == "" {
+					continue
+				}
+				rw := measureTextW(font, r) + sc(2)
+				hs := createChild(hwnd, "STATIC", r, 0, x, y, rw, lineH, 0, font)
+				if i%2 == 1 { // нечётные фрагменты (между \x01) — красные
+					errRedStatics[hs] = true
+				}
+				x += rw
+			}
+			y += lineH
+		}
+	}
 
 	// Ряд «отсчёт слева / кнопка справа» под текстом.
-	rowY := textY + textH + sc(18)
+	rowY := y + sc(16)
 	hErrCountdown = createChild(hwnd, "STATIC", countdownText(errRemaining), 0,
 		sc(22), rowY+sc(6), sc(260), sc(20), 0, font)
 	const bw = 110
@@ -116,6 +154,9 @@ func errWndProc(hwnd, msg, wParam, lParam uintptr) uintptr {
 		return 0
 	case WM_CTLCOLORSTATIC:
 		procSetBkMode.Call(wParam, TRANSPARENT)
+		if errRedStatics[lParam] { // lParam — HWND контрола
+			procSetTextColor.Call(wParam, errRed)
+		}
 		return errFaceBrush
 	case WM_CLOSE:
 		// До конца отсчёта закрытие (крестик/Alt+F4) игнорируем.
