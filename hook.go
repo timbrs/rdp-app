@@ -15,7 +15,6 @@ type Scan struct {
 }
 
 const (
-	scLAlt   = 0x38
 	scLShift = 0x2A
 	scLCtrl  = 0x1D
 	scEsc    = 0x01
@@ -43,16 +42,14 @@ var (
 	winExt      = true
 	winDownTick uint64
 
-	altSticky   bool
-	altScan     = scLAlt
-	altExt      bool
 	shiftSticky bool
 	shiftScan   = scLShift
 	shiftExt    bool
 
-	targetPid  uint32
-	ihCachePid uint32
-	ihCacheWnd uintptr
+	targetWnd   uintptr
+	boundRail   uintptr
+	ihCacheRail uintptr
+	ihCacheWnd  uintptr
 
 	hookHandle uintptr
 )
@@ -78,7 +75,7 @@ var (
 
 	cbEnumChildIH = syscall.NewCallback(enumChildIH)
 	cbEnumTopIH   = syscall.NewCallback(enumTopIH)
-	cbCountRail   = syscall.NewCallback(countRailProc)
+	cbFindFsRail  = syscall.NewCallback(enumFindFsRail)
 	cbHookProc    = syscall.NewCallback(hookProc)
 )
 
@@ -104,23 +101,39 @@ func enumTopIH(top uintptr, _ uintptr) uintptr {
 	return 1
 }
 
-func findIHWindow(pid uint32) uintptr {
-	if pid == 0 {
-		return 0
-	}
-	if ihCachePid == pid && ihCacheWnd != 0 && isWindow(ihCacheWnd) {
-		return ihCacheWnd
+// resolveIH ищет IHWindowClass в поддереве сфокусированного RAIL-окна fg; если там
+// нет — фолбэк на поиск по всему процессу pid (IH как отдельное верхнее окно).
+func resolveIH(fg uintptr, pid uint32) uintptr {
+	findWnd = 0
+	procEnumChildWindows.Call(fg, cbEnumChildIH, 0)
+	if findWnd != 0 {
+		return findWnd
 	}
 	findPid = pid
 	findWnd = 0
 	procEnumWindows.Call(cbEnumTopIH, 0)
-	ihCachePid = pid
-	ihCacheWnd = findWnd
 	return findWnd
 }
 
+// findIHForRail — IHWindowClass для конкретного RAIL-окна fg. Кэш привязан к fg, а
+// НЕ к pid: у фермы один pid на несколько окон, и цель обязана следовать за фокусом.
+// Смена/пересоздание окна меняет fg — кэш переопределяется сам (лечит «отвал» после
+// сворачивания-разворачивания без ручного повтора).
+func findIHForRail(fg uintptr, pid uint32) uintptr {
+	if fg == 0 {
+		return 0
+	}
+	if ihCacheRail == fg && ihCacheWnd != 0 && isWindow(ihCacheWnd) {
+		return ihCacheWnd
+	}
+	ih := resolveIH(fg, pid)
+	ihCacheRail = fg
+	ihCacheWnd = ih
+	return ih
+}
+
 func postSeq(seq []Scan) {
-	t := findIHWindow(targetPid)
+	t := targetWnd
 	if t == 0 || len(seq) == 0 {
 		return
 	}
@@ -223,10 +236,12 @@ func isRemoteFocused() bool {
 	if !isWindowFullScreen(fg) {
 		return false
 	}
-	if findIHWindow(pid) == 0 {
+	ih := findIHForRail(fg, pid)
+	if ih == 0 {
 		return false
 	}
-	targetPid = pid
+	targetWnd = ih
+	boundRail = fg
 	return true
 }
 
@@ -281,19 +296,11 @@ func sendAltTab(shift bool, tabScan int, tabExt bool) {
 }
 
 func releaseSticky() {
-	if !altSticky && !shiftSticky {
+	if !shiftSticky {
 		return
 	}
-	var s []Scan
-	if shiftSticky {
-		s = append(s, Scan{shiftScan, true, shiftExt, VK_SHIFT, false})
-		shiftSticky = false
-	}
-	if altSticky {
-		s = append(s, Scan{altScan, true, altExt, VK_MENU, false})
-		altSticky = false
-	}
-	postSeq(s)
+	postSeq([]Scan{{shiftScan, true, shiftExt, VK_SHIFT, false}})
+	shiftSticky = false
 }
 
 // Под-флаг Win+<клавиша> по vk. Неизвестная клавиша -> winOther.
@@ -348,13 +355,6 @@ func handle(wParam uintptr, kb *KBDLLHOOKSTRUCT) bool {
 	}
 
 	if vk == VK_MENU || vk == VK_LMENU || vk == VK_RMENU {
-		if down {
-			altScan = sc
-			altExt = ext
-		} else if altSticky {
-			postSeq([]Scan{{altScan, true, altExt, VK_MENU, false}})
-			altSticky = false
-		}
 		return false
 	}
 	if vk == VK_SHIFT || vk == VK_LSHIFT || vk == VK_RSHIFT {
