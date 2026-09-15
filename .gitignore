@@ -1,4 +1,5 @@
 *.syso
 builds/
+.idea/
 *.exe
 virustotal.api.key

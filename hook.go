@@ -76,6 +76,7 @@ var (
 	cbEnumChildIH = syscall.NewCallback(enumChildIH)
 	cbEnumTopIH   = syscall.NewCallback(enumTopIH)
 	cbFindFsRail  = syscall.NewCallback(enumFindFsRail)
+	cbCollectRail = syscall.NewCallback(enumCollectRail)
 	cbHookProc    = syscall.NewCallback(hookProc)
 )
 
@@ -241,7 +242,11 @@ func isRemoteFocused() bool {
 		return false
 	}
 	targetWnd = ih
-	boundRail = fg
+	// Живучесть продлеваем только нашей сессией; на чужой (из baseline) RemoteApp
+	// хоткеи всё равно форвардим (targetWnd), но процесс из-за неё не держим.
+	if isOurRail(fg) {
+		boundRail = fg
+	}
 	return true
 }
 
@@ -299,7 +304,11 @@ func releaseSticky() {
 	if !shiftSticky {
 		return
 	}
-	postSeq([]Scan{{shiftScan, true, shiftExt, VK_SHIFT, false}})
+	// targetWnd мог остаться от прошлой сессии и уже быть разрушен — не шлём в
+	// мёртвый хендл (его значение могло уйти чужому окну).
+	if targetWnd != 0 && isWindow(targetWnd) {
+		postSeq([]Scan{{shiftScan, true, shiftExt, VK_SHIFT, false}})
+	}
 	shiftSticky = false
 }
 

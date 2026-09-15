@@ -2,7 +2,7 @@ package main
 
 import "os"
 
-const appVersion = "1.0.9"
+const appVersion = "1.0.10"
 
 // Аргумент — путь .rdp, если exe запустили с ним (ярлык «rdpkey.exe файл.rdp» или
 // вручную настроенная ассоциация). Go уже разобрал кавычки — путь в os.Args[1].

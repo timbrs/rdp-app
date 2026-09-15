@@ -15,18 +15,45 @@ import (
 // уже завершился, новых mstsc не осталось и ни одной сессии так и не появилось.
 const giveUpTicks = 5
 
+// baselineRail: HWND'ы всех RAIL_WINDOW, существовавших ДО нашего запуска. Окна из
+// набора — чужие сессии, жившие до нас; своими их не считаем ни для живучести, ни
+// для привязки хука, иначе rdpkey висел бы, пока открыт хоть один сторонний
+// RemoteApp. Ключ — HWND, а не pid: ферма/брокер (mstsc.exe -Embedding) держит окно
+// на заранее запущенном процессе, и по pid наш свежий сеанс от чужого не отличить.
+var baselineRail map[uintptr]struct{}
+
 var (
-	fsRailPIDs  map[uint32]struct{}
+	railSnap    map[uintptr]struct{}
 	fsRailFound uintptr
 )
 
-// enumFindFsRail: первое видимое полноэкранное RAIL-окно, принадлежащее одному из
-// pid'ов fsRailPIDs (см. findFullscreenRail).
+// enumCollectRail: собрать HWND всех верхних RAIL_WINDOW (любой видимости).
+func enumCollectRail(h uintptr, _ uintptr) uintptr {
+	if classNameEqual(h, "RAIL_WINDOW") {
+		railSnap[h] = struct{}{}
+	}
+	return 1
+}
+
+func railWindows() map[uintptr]struct{} {
+	railSnap = map[uintptr]struct{}{}
+	procEnumWindows.Call(cbCollectRail, 0)
+	return railSnap
+}
+
+// isOurRail: окно h не из baseline — появилось после нашего запуска. Общий критерий
+// «своего» RAIL-окна для сторожа (session.go) и хука (hook.go).
+func isOurRail(h uintptr) bool {
+	_, existed := baselineRail[h]
+	return !existed
+}
+
+// enumFindFsRail: первое видимое полноэкранное RAIL-окно нашей сессии (isOurRail).
 func enumFindFsRail(h uintptr, _ uintptr) uintptr {
 	if !isWindowVisible(h) || !classNameEqual(h, "RAIL_WINDOW") {
 		return 1
 	}
-	if _, ok := fsRailPIDs[getWindowThreadProcessId(h)]; !ok {
+	if !isOurRail(h) {
 		return 1
 	}
 	if !isWindowFullScreen(h) {
@@ -36,11 +63,7 @@ func enumFindFsRail(h uintptr, _ uintptr) uintptr {
 	return 0
 }
 
-func findFullscreenRail(pids map[uint32]struct{}) uintptr {
-	if len(pids) == 0 {
-		return 0
-	}
-	fsRailPIDs = pids
+func findFullscreenRail() uintptr {
 	fsRailFound = 0
 	procEnumWindows.Call(cbFindFsRail, 0)
 	return fsRailFound
@@ -81,6 +104,20 @@ func newMstscSet(baseline map[uint32]struct{}) map[uint32]struct{} {
 	return cur
 }
 
+// sessionConnecting: сеанс ещё поднимается (ждём логина). Пока наш mstsc жив —
+// точно да. После его выхода — да, только пока остался хоть один mstsc, появившийся
+// после нас (брокер, которому наш mstsc мог передать сеанс). Проверку по exited
+// держим первой: она надёжно закрывает наш собственный pid, поэтому его случайное
+// переиспользование в newMstscSet живой логин не оборвёт.
+func sessionConnecting(baseline map[uint32]struct{}, exited <-chan struct{}) bool {
+	select {
+	case <-exited:
+		return len(newMstscSet(baseline)) > 0
+	default:
+		return true
+	}
+}
+
 func mstscPath() string {
 	win := os.Getenv("windir")
 	if win == "" {
@@ -100,7 +137,8 @@ func runSession(rdp string, hk Hotkeys) {
 	warnIfPersonalCertExpiring()
 
 	mstsc := mstscPath()
-	baseline := mstscPIDs() // снимок mstsc ДО запуска — см. newMstscSet
+	baseline := mstscPIDs()      // снимок mstsc ДО запуска — см. newMstscSet
+	baselineRail = railWindows() // снимок RAIL-окон ДО запуска — см. baselineRail
 
 	var cmd *exec.Cmd
 	if rdp != "" {
@@ -135,13 +173,13 @@ func runSession(rdp string, hk Hotkeys) {
 			break
 		}
 		if msg.Message == WM_TIMER {
-			newSet := newMstscSet(baseline)
-
-			// Якорь — конкретное RAIL-окно нашей сессии (его же ставит хук при
-			// форварде). Пока окно живо (в т.ч. свёрнуто) — сессия жива. Умерло —
-			// пробуем перепривязаться к свежему полноэкранному RAIL (пересоздание).
+			// Якорь — RAIL-окно нашей сессии (его же ставит хук при форварде). Пока
+			// окно живо (в т.ч. свёрнуто) — сессия жива. Умерло — пробуем
+			// перепривязаться к свежему полноэкранному RAIL (пересоздание/переподкл.).
+			// Полный обход окон делаем только когда якоря нет, а перебор процессов
+			// (внутри sessionConnecting) — только в фазе ожидания логина, не каждый тик.
 			if boundRail == 0 || !isWindow(boundRail) {
-				boundRail = findFullscreenRail(newSet)
+				boundRail = findFullscreenRail()
 			}
 
 			switch {
@@ -155,14 +193,7 @@ func runSession(rdp string, hk Hotkeys) {
 				}
 			default:
 				// Сессии ещё не было: ждём логина (может тянуться 5+ минут).
-				// Сдаёмся, только когда наш mstsc вышел и новых mstsc не осталось.
-				connecting := len(newSet) > 0
-				select {
-				case <-exited:
-				default:
-					connecting = true
-				}
-				if connecting {
+				if sessionConnecting(baseline, exited) {
 					gone = 0
 				} else {
 					gone++
