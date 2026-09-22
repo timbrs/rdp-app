@@ -1,5 +1,7 @@
 *.syso
+*.o
 builds/
 .idea/
 *.exe
 virustotal.api.key
+.avtools/
