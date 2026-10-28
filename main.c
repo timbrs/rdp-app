@@ -22,6 +22,7 @@ static const wchar_t *arg_after_program(void) {
 int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE prev, LPWSTR cmd, int show) {
     (void)prev; (void)cmd; (void)show;
     g_hInst = hInst;
+    DLOG_INIT();
 
     Config cfg = load_config();
     ensure_config(&cfg); // молча создаём config.ini с дефолтами, если его ещё нет
@@ -35,7 +36,9 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE prev, LPWSTR cmd, int show) {
     install_association();
 
     const wchar_t *rdp = run_gui(&cfg);
+    DLOG(L"GUI закрыт, выбран: \"%ls\"", rdp ? rdp : L"(NULL)");
     if (rdp && rdp[0])
         run_session(rdp, cfg.hotkeys);
+    DLOG(L"выход из wWinMain");
     return 0;
 }

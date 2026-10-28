@@ -24,6 +24,23 @@ static int       shiftScan = SC_LSHIFT;
 static BOOL      shiftExt = FALSE;
 static HWND      ihCacheRail = NULL, ihCacheWnd = NULL;
 
+#ifdef RDPKEY_LOG
+static const wchar_t *s_why = L"";
+static BOOL log_key(int vk) {
+    if (vk == VK_LWIN || vk == VK_RWIN || vk == VK_SNAPSHOT) return TRUE;
+    if (vk == VK_TAB) return key_down(VK_MENU);
+    if (vk == VK_ESCAPE) return key_down(VK_CONTROL);
+    return winDown;
+}
+#define WHY(s)    (s_why = (s))
+#define KLOG(...) do { if (log_key(vk)) dlog(__VA_ARGS__); } while (0)
+#define KLOG_FG() do { if (log_key(vk)) dlog_wnd(L"  foreground", GetForegroundWindow()); } while (0)
+#else
+#define WHY(s)    ((void)0)
+#define KLOG(...) ((void)0)
+#define KLOG_FG() ((void)0)
+#endif
+
 static LPARAM makeLParam(int scan, BOOL ext, BOOL up, BOOL altCtx) {
     LPARAM l = 1; // repeat count = 1
     l |= (LPARAM)(scan & 0xFF) << 16;
@@ -74,22 +91,47 @@ static HWND findIHForRail(HWND fg, DWORD pid) {
 
 BOOL is_remote_focused(void) {
     HWND fg = GetForegroundWindow();
-    if (!fg) return FALSE;
+    if (!fg) { WHY(L"нет foreground-окна"); return FALSE; }
     DWORD pid = 0;
     GetWindowThreadProcessId(fg, &pid);
-    if (pid == 0 || pid == GetCurrentProcessId()) return FALSE;
-    if (!class_name_equal(fg, L"RAIL_WINDOW")) return FALSE;
-    if (!window_fullscreen(fg)) return FALSE;
-    HWND ih = findIHForRail(fg, pid);
-    if (!ih) return FALSE;
+    if (pid == 0 || pid == GetCurrentProcessId()) { WHY(L"foreground — наш процесс/pid 0"); return FALSE; }
+    if (!class_name_equal(fg, L"RAIL_WINDOW")) { WHY(L"foreground не RAIL_WINDOW"); return FALSE; }
+    HWND rail = fg;
+    if (!window_fullscreen(rail)) {
+        // Фокус на служебном RAIL-окне (BBar — панель подключения) полноэкранного
+        // сеанса: работаем от окна-владельца и возвращаем фокус ему.
+        HWND root = GetAncestor(fg, GA_ROOTOWNER);
+        if (!root || root == fg || !class_name_equal(root, L"RAIL_WINDOW") || !window_fullscreen(root)) {
+            WHY(L"RAIL_WINDOW не полноэкранное");
+            return FALSE;
+        }
+        rail = root;
+        static ULONGLONG s_activateTick;
+        ULONGLONG now = GetTickCount64();
+        if (now - s_activateTick > 1000) {
+            s_activateTick = now;
+            BOOL ok = SetForegroundWindow(rail);
+            DLOG(L"фокус на служебном RAIL %p, владелец %p полноэкранный: SetForegroundWindow=%d, fg теперь %p",
+                 fg, rail, ok, GetForegroundWindow());
+            (void)ok;
+        }
+    }
+    HWND ih = findIHForRail(rail, pid);
+    if (!ih) { WHY(L"не найден IHWindowClass"); return FALSE; }
+    if (ih != g_targetWnd) DLOG(L"цель проброса: IHWindowClass %p (было %p), RAIL %p pid=%lu", ih, g_targetWnd, rail, pid);
     g_targetWnd = ih;
-    if (is_our_rail(fg)) g_boundRail = fg;
+    // Якорь — любое полноэкранное RAIL в фокусе, в т.ч. открытое до нашего запуска.
+    if (g_boundRail != rail)
+        DLOG(L"якорь перепривязан по фокусу: %p -> %p%ls", g_boundRail, rail,
+             is_our_rail(rail) ? L"" : L" (окно открыто до запуска)");
+    g_boundRail = rail;
     return TRUE;
 }
 
 static void postSeq(const Scan *seq, int n) {
     HWND t = g_targetWnd;
-    if (!t || n <= 0) return;
+    if (!t || n <= 0) { DLOG(L"postSeq: нет цели (t=%p n=%d)", t, n); return; }
+    DLOG(L"postSeq: %d сообщ. -> %p (IsWindow=%d)", n, t, IsWindow(t) ? 1 : 0);
     BOOL altDown = key_down(VK_MENU);
     for (int i = 0; i < n; i++) {
         Scan s = seq[i];
@@ -98,7 +140,8 @@ static void postSeq(const Scan *seq, int n) {
         UINT msg;
         if (s.up) msg = ctx ? WM_SYSKEYUP : WM_KEYUP;
         else      msg = ctx ? WM_SYSKEYDOWN : WM_KEYDOWN;
-        PostMessageW(t, msg, (WPARAM)s.vk, makeLParam(s.scan, s.ext, s.up, ctx));
+        if (!PostMessageW(t, msg, (WPARAM)s.vk, makeLParam(s.scan, s.ext, s.up, ctx)))
+            DLOG(L"PostMessage(%p, 0x%X, vk=0x%02X) ошибка %lu", t, msg, s.vk, GetLastError());
     }
 }
 
@@ -219,6 +262,8 @@ static BOOL handle(WPARAM wParam, const KBDLLHOOKSTRUCT *kb) {
     BOOL ext = (kb->flags & LLKHF_EXTENDED) != 0;
 
     if (!is_remote_focused()) {
+        KLOG(L"vk=0x%02X %ls: НЕ пробрасываю — %ls", vk, down ? L"down" : L"up", s_why);
+        KLOG_FG();
         release_sticky();
         winDown = FALSE;
         return FALSE;
@@ -235,6 +280,8 @@ static BOOL handle(WPARAM wParam, const KBDLLHOOKSTRUCT *kb) {
         }
         return FALSE;
     }
+
+    KLOG(L"vk=0x%02X %ls: удалёнка в фокусе, цель %p", vk, down ? L"down" : L"up", g_targetWnd);
 
     if (gHotkeys.win && isWinKey) {
         if (down) {
@@ -311,6 +358,9 @@ static BOOL handle(WPARAM wParam, const KBDLLHOOKSTRUCT *kb) {
 }
 
 LRESULT CALLBACK hook_proc(int nCode, WPARAM w, LPARAM l) {
+#ifdef RDPKEY_LOG
+    g_hookTick = GetTickCount64();
+#endif
     if (nCode == HC_ACTION) {
         const KBDLLHOOKSTRUCT *kb = (const KBDLLHOOKSTRUCT *)l;
         if (handle(w, kb)) return 1;

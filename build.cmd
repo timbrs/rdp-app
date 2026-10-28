@@ -10,18 +10,26 @@ set "ROOT=%~dp0"
 cd /d "%ROOT%"
 if not exist "%ROOT%builds" mkdir "%ROOT%builds"
 
+rem build.cmd log -> builds\rdpkey-log.exe с отладочным логом в %LOCALAPPDATA%\rdpkey\logs
+set "OUT=rdpkey.exe"
+set "FLAGS=-s"
+if /I "%~1"=="log" (
+  set "OUT=rdpkey-log.exe"
+  set "FLAGS=-g -DRDPKEY_LOG"
+)
+
 "%MINGW%\windres.exe" --include-dir "%ROOT%." --include-dir "%ROOT%resources" "%ROOT%rdpkey.rc" -O coff -o "%ROOT%rdpkey_res.o"
 if errorlevel 1 (echo windres failed & exit /b 1)
 
 "%MINGW%\gcc.exe" -O2 -municode -mwindows -DUNICODE -D_UNICODE ^
   -finput-charset=UTF-8 -fexec-charset=UTF-8 -fwide-exec-charset=UTF-16LE ^
-  -s -Wl,--nxcompat,--dynamicbase,--high-entropy-va ^
-  -o "%ROOT%builds\rdpkey.exe" ^
-  main.c winutil.c config.c assoc.c rdp.c cert.c hook.c session.c gui.c errdialog.c ^
+  %FLAGS% -Wl,--nxcompat,--dynamicbase,--high-entropy-va ^
+  -o "%ROOT%builds\%OUT%" ^
+  main.c winutil.c config.c assoc.c rdp.c cert.c hook.c session.c gui.c errdialog.c dlog.c ^
   rdpkey_res.o ^
   -luser32 -lgdi32 -lcomctl32 -lcomdlg32 -lshell32 -ladvapi32 -lcrypt32
 if errorlevel 1 (echo gcc failed & exit /b 1)
 
-echo OK: %ROOT%builds\rdpkey.exe
+echo OK: %ROOT%builds\%OUT%
 
 if /I "%~1"=="scan" powershell -ExecutionPolicy Bypass -File "%ROOT%.avtools\scan.ps1"

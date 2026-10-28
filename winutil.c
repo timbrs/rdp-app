@@ -118,5 +118,6 @@ void open_help(void) {
 }
 
 void msg_box(const wchar_t *text, const wchar_t *caption, UINT flags) {
+    DLOG(L"MessageBox «%ls»: %ls", caption, text);
     MessageBoxW(NULL, text, caption, flags);
 }

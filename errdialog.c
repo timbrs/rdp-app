@@ -150,6 +150,7 @@ static LRESULT CALLBACK errWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lP
 }
 
 void show_locked_error(const wchar_t *title, const wchar_t *body) {
+    DLOG(L"окно ошибки «%ls»", title);
     wcsncpy(errBody, body, 4095);
     errBody[4095] = 0;
 

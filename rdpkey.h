@@ -18,7 +18,7 @@
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 
-#define APP_VERSION L"1.0.11"
+#define APP_VERSION L"1.0.12"
 
 // ---- конфиг ----
 
@@ -99,6 +99,24 @@ void  msg_box(const wchar_t *text, const wchar_t *caption, UINT flags);
 
 // main.c
 extern HINSTANCE g_hInst;
+
+// dlog.c — отладочный лог, только в сборке `build.cmd log` (-DRDPKEY_LOG)
+#ifdef RDPKEY_LOG
+extern ULONGLONG g_hookTick;
+void dlog_init(void);
+void dlog(const wchar_t *fmt, ...);
+void dlog_wnd(const wchar_t *what, HWND h);
+void dlog_windows(DWORD launchedPid);
+#define DLOG(...)          dlog(__VA_ARGS__)
+#define DLOG_INIT()        dlog_init()
+#define DLOG_WND(what, h)  dlog_wnd(what, h)
+#define DLOG_WINDOWS(pid)  dlog_windows(pid)
+#else
+#define DLOG(...)          ((void)0)
+#define DLOG_INIT()        ((void)0)
+#define DLOG_WND(what, h)  ((void)0)
+#define DLOG_WINDOWS(pid)  ((void)0)
+#endif
 
 // Клавиши-модификаторы (маски).
 enum { KM_ALT = 1, KM_CTRL = 2, KM_SHIFT = 4, KM_WIN = 8 };

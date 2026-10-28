@@ -9,8 +9,13 @@
 #include <stdio.h>
 
 // Сколько тиков (по 2 с) ждать после выхода нашего mstsc, пока не появилось наше
-// RAIL-окно, прежде чем сдаться (запас на долгий логин/хендофф брокеру).
-#define GIVEUP_TICKS 30
+// RAIL-окно, прежде чем сдаться. Запущенный mstsc отдаёт подключение COM-процессу
+// `mstsc -Embedding` и выходит через ~2 с, так что ждём по сути только окон —
+// с запасом на долгий логин через VPN/брокер.
+#define GIVEUP_TICKS 300
+// Сколько тиков ждать после пропажи якоря, пока не найдётся новый полноэкранный
+// RAIL (реконнект, пересоздание окна), прежде чем считать сеанс закрытым.
+#define LOST_TICKS 15
 
 HWND *g_baselineRail = NULL;
 int   g_baselineRailN = 0;
@@ -55,20 +60,58 @@ BOOL have_our_rail(void) {
     return s_haveOur;
 }
 
-static HWND s_fsRail;
+// Предпочитаем наше RAIL-окно; иначе — любое полноэкранное (сеанс открыт до запуска).
+static HWND s_fsRail, s_fsAny;
 static BOOL CALLBACK enumFindFsRail(HWND h, LPARAM lp) {
     (void)lp;
     if (!IsWindowVisible(h) || !class_name_equal(h, L"RAIL_WINDOW")) return TRUE;
-    if (!is_our_rail(h)) return TRUE;
     if (!window_fullscreen(h)) return TRUE;
+    if (!is_our_rail(h)) {
+        if (!s_fsAny) s_fsAny = h;
+        return TRUE;
+    }
     s_fsRail = h;
     return FALSE;
 }
 HWND find_fullscreen_rail(void) {
-    s_fsRail = NULL;
+    s_fsRail = s_fsAny = NULL;
     EnumWindows(enumFindFsRail, 0);
-    return s_fsRail;
+    return s_fsRail ? s_fsRail : s_fsAny;
 }
+
+#ifdef RDPKEY_LOG
+static void log_tick(HWND prevBound, BOOL seen, int gone, HANDLE hMstsc, DWORD mstscPid) {
+    static int n, lastSeen = -1, lastGone = -1, lastAlive = -2, lastOur = -1;
+    static HWND lastBound = (HWND)-1;
+    n++;
+    int alive = -1;
+    if (hMstsc) alive = WaitForSingleObject(hMstsc, 0) != WAIT_OBJECT_0;
+    if (alive != lastAlive) {
+        DWORD code = 0;
+        if (alive == 0) GetExitCodeProcess(hMstsc, &code);
+        dlog(L"запущенный mstsc pid=%lu: %ls (код выхода %lu)", mstscPid,
+             alive == 1 ? L"жив" : alive == 0 ? L"ЗАВЕРШИЛСЯ" : L"нет хендла", code);
+    }
+    if (prevBound != g_boundRail) {
+        if (prevBound && !IsWindow(prevBound)) dlog(L"якорь %p УНИЧТОЖЕН", prevBound);
+        dlog_wnd(L"якорь теперь", g_boundRail);
+    }
+    int our = have_our_rail();
+    BOOL changed = seen != lastSeen || gone != lastGone || our != lastOur ||
+                   g_boundRail != lastBound || alive != lastAlive;
+    if (changed || n % 30 == 0) {
+        LASTINPUTINFO li;
+        li.cbSize = sizeof(li);
+        DWORD inputAge = GetLastInputInfo(&li) ? (GetTickCount() - li.dwTime) / 1000 : 0;
+        long hookAge = g_hookTick ? (long)((GetTickCount64() - g_hookTick) / 1000) : -1;
+        dlog(L"тик %d: якорь=%p seen=%d gone=%d mstsc=%d нашиRAIL=%d хук=%p | хук звали %ld с назад, ввод был %lu с назад",
+             n, g_boundRail, seen, gone, alive, our, g_hook, hookAge, inputAge);
+        dlog_wnd(L"  foreground", GetForegroundWindow());
+    }
+    dlog_windows(mstscPid);
+    lastSeen = seen; lastGone = gone; lastAlive = alive; lastOur = our; lastBound = g_boundRail;
+}
+#endif
 
 static void mstsc_path(wchar_t *out, int cch) {
     wchar_t windir[MAX_PATH];
@@ -79,15 +122,20 @@ static void mstsc_path(wchar_t *out, int cch) {
 
 void run_session(const wchar_t *rdp, Hotkeys hk) {
     gHotkeys = hk;
+    DLOG(L"run_session: rdp=\"%ls\" хоткеи win=%d ctrlEsc=%d altTab=%d altShiftTab=%d prtsc=%d",
+         rdp ? rdp : L"", hk.win, hk.ctrlEsc, hk.altTab, hk.altShiftTab, hk.printScreen);
 
     // Проверка персонального сертификата — при ЛЮБОМ подключении (в т.ч. по .rdp,
     // когда GUI не открывается).
     warn_if_personal_cert_expiring();
+    DLOG(L"проверка сертификата пройдена");
 
     wchar_t mstsc[MAX_PATH];
     mstsc_path(mstsc, MAX_PATH);
 
     snapshot_baseline_rail();
+    DLOG(L"базовых RAIL-окон до запуска mstsc: %d", g_baselineRailN);
+    DLOG_WINDOWS(0);
 
     // Запуск mstsc через оболочку («открыть программу»), а не CreateProcess: более
     // прикладной силуэт для эвристик (не «лоадер»), и статический импорт —
@@ -105,16 +153,24 @@ void run_session(const wchar_t *rdp, Hotkeys hk) {
     sei.lpParameters = (rdp && rdp[0]) ? params : NULL;
     sei.nShow = SW_SHOWNORMAL;
     if (!ShellExecuteExW(&sei)) {
+        DLOG(L"ShellExecuteEx(mstsc) ОШИБКА %lu", GetLastError());
         msg_box(L"Не удалось запустить mstsc.exe.", L"rdpkey", MB_ICONERROR);
         return;
     }
     HANDLE hMstsc = sei.hProcess; // может быть NULL, если оболочка не вернула хендл
+#ifdef RDPKEY_LOG
+    DWORD mstscPid = hMstsc ? GetProcessId(hMstsc) : 0;
+    dlog(L"mstsc запущен: %ls %ls, hProcess=%p pid=%lu", mstsc, params, hMstsc, mstscPid);
+#endif
 
     if (!install_hook()) {
+        DLOG(L"install_hook ОШИБКА %lu", GetLastError());
         msg_box(L"Не удалось установить LL-хук.", L"rdpkey", MB_ICONERROR);
         CloseHandle(hMstsc);
         return;
     }
+
+    DLOG(L"LL-хук установлен: %p", g_hook);
 
     SetTimer(NULL, 1, 2000, NULL);
     BOOL seen = FALSE;
@@ -122,6 +178,9 @@ void run_session(const wchar_t *rdp, Hotkeys hk) {
     MSG msg;
     while (GetMessageW(&msg, NULL, 0, 0) > 0) {
         if (msg.message == WM_TIMER) {
+#ifdef RDPKEY_LOG
+            HWND prevBound = g_boundRail;
+#endif
             // Якорь — RAIL-окно нашей сессии. Пока живо (в т.ч. свёрнуто) — сессия
             // жива. Умерло — пробуем перепривязаться к свежему полноэкранному RAIL.
             if (g_boundRail == 0 || !IsWindow(g_boundRail))
@@ -132,7 +191,10 @@ void run_session(const wchar_t *rdp, Hotkeys hk) {
                 gone = 0;
             } else if (seen) {
                 gone++;
-                if (gone >= 2) PostQuitMessage(0); // сессия была и пропала
+                if (gone >= LOST_TICKS) { // сессия была и пропала
+                    DLOG(L"ВЫХОД: якорь пропал и нет полноэкранного RAIL %d тиков подряд", gone);
+                    PostQuitMessage(0);
+                }
             } else {
                 // Сессии ещё не было: ждём логина (может тянуться 5+ минут). Живём,
                 // пока наш mstsc жив ИЛИ уже есть наше RAIL-окно.
@@ -141,13 +203,20 @@ void run_session(const wchar_t *rdp, Hotkeys hk) {
                 if (connecting) gone = 0;
                 else {
                     gone++;
-                    if (gone >= GIVEUP_TICKS) PostQuitMessage(0);
+                    if (gone >= GIVEUP_TICKS) {
+                        DLOG(L"ВЫХОД: сеанс так и не появился, mstsc мёртв и нет наших RAIL %d тиков", gone);
+                        PostQuitMessage(0);
+                    }
                 }
             }
+#ifdef RDPKEY_LOG
+            log_tick(prevBound, seen, gone, hMstsc, mstscPid);
+#endif
         }
         TranslateMessage(&msg);
         DispatchMessageW(&msg);
     }
+    DLOG(L"цикл сообщений завершён (msg=0x%X), снимаю хук", msg.message);
     remove_hook();
     if (hMstsc) CloseHandle(hMstsc);
 }

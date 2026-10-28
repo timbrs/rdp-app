@@ -16,7 +16,7 @@
 
 Бинарь без установщика и без обращений к сторонним серверам. Из-за небольшого нестандартного PE-файла ML-эвристика Microsoft Defender иногда даёт **ложное срабатывание** `Trojan:Win32/Wacatac.C!ml`. Такие детекты отправляются в Microsoft и признаются чистыми («Not malware»).
 
-Релиз v1.0.11 проверен на VirusTotal:
+Релиз v1.0.12 проверен на VirusTotal (0 срабатываний):
 
-- SHA-256: `d36327b22dcbe65d71a8e371e0d5471687be8d267991074f3974447f3fffc9af`
-- Отчёт: https://www.virustotal.com/gui/file/d36327b22dcbe65d71a8e371e0d5471687be8d267991074f3974447f3fffc9af
+- SHA-256: `a84be4bc995930362a96894f1c27bc84a2e86a15a8db397e23ef932180e60a76`
+- Отчёт: https://www.virustotal.com/gui/file/a84be4bc995930362a96894f1c27bc84a2e86a15a8db397e23ef932180e60a76

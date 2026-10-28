@@ -30,6 +30,7 @@ static HBRUSH  faceBrush;
 static HFONT   bigFont, guiFont;
 
 static BOOL    gHasConn;
+static HWND    hLaunchBtn, hLastFocus;
 static HWND    hConnStatic, hChangeBtn, hTooltip;
 static BOOL    gExpiryWarn;
 static int     gConnX, gConnY, gConnH;
@@ -201,12 +202,14 @@ static void onCreate(HWND hwnd) {
 
     create_child(hwnd, L"STATIC", L"rdpkey v" APP_VERSION, 0,
                  scDPI(margin), scDPI(15), scDPI(180), scDPI(20), 0, guiFont);
-    create_child(hwnd, L"BUTTON", L"Запустить удалёнку с пробросом клавиш",
-                 BS_PUSHBUTTON | WS_TABSTOP, scDPI(margin), scDPI(46),
-                 scDPI(btnW), scDPI(56), ID_LAUNCH, bigFont);
+    // Файл уже выбран — большая кнопка по умолчанию и в фокусе: Enter/Space сразу подключают.
+    gHasConn = file_exists(lastRdp());
+    hLaunchBtn = create_child(hwnd, L"BUTTON", L"Запустить удалёнку с пробросом клавиш",
+                              (gHasConn ? BS_DEFPUSHBUTTON : BS_PUSHBUTTON) | WS_TABSTOP,
+                              scDPI(margin), scDPI(46), scDPI(btnW), scDPI(56), ID_LAUNCH, bigFont);
+    hLastFocus = gHasConn ? hLaunchBtn : NULL;
 
     int y = 116;
-    gHasConn = file_exists(lastRdp());
     if (gHasConn) { createConnRow(hwnd); y = 150; }
 
     for (int i = 0; i < hkItemsN; i++) {
@@ -353,6 +356,17 @@ static LRESULT CALLBACK wndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
         case WM_CTLCOLORBTN:
             SetBkMode((HDC)wParam, TRANSPARENT);
             return (LRESULT)faceBrush;
+        case DM_GETDEFID:
+            return gHasConn ? MAKELRESULT(ID_LAUNCH, DC_HASDEFID) : 0;
+        case WM_ACTIVATE:
+            if (LOWORD(wParam) == WA_INACTIVE) {
+                HWND f = GetFocus();
+                if (f && IsChild(hwnd, f)) hLastFocus = f;
+            } else if (hLastFocus && !HIWORD(wParam)) {
+                SetFocus(hLastFocus);
+                return 0;
+            }
+            break;
         case WM_CLOSE:   DestroyWindow(hwnd); return 0;
         case WM_DESTROY: PostQuitMessage(0); return 0;
     }
@@ -392,6 +406,7 @@ const wchar_t *run_gui(Config *cfg) {
 
     MSG msg;
     while (GetMessageW(&msg, NULL, 0, 0) > 0) {
+        if (IsWindow(hMainWnd) && IsDialogMessageW(hMainWnd, &msg)) continue; // Enter/Space/Tab
         TranslateMessage(&msg);
         DispatchMessageW(&msg);
     }
